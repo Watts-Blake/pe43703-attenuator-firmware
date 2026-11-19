@@ -89,4 +89,4 @@ No such compatibility claim is made. Match the MCU, RF chip, oscillator, logic v
 
 ## License
 
-[MIT](LICENSE). Third-party datasheets and linked tools retain their own licenses; no vendor firmware is included.
+[MIT](LICENSE) for this project's firmware, tools and documentation. The unmodified OpenOCD test fixtures retain their [upstream licenses](tests/fixtures/openocd-012/COPYING); see their [provenance](tests/fixtures/README.md). Third-party datasheets and linked tools retain their own licenses; no vendor firmware is included.

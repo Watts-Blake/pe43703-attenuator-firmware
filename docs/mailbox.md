@@ -4,20 +4,26 @@ The ELF exports `mailbox`, a 128-byte, 4-byte-aligned structure at `0x20000000`.
 
 ## Offline command staging
 
-`tools/mailbox.py` checks the ARM ELF type, load ranges, entry/stack vector and mailbox symbol/section address/size before generating a Tcl file. Use the exact ELF that was flashed. The generated file selects one exact ST-Link serial and compares all ELF flash load bytes using target memory reads before reading or writing the mailbox. It validates the live schema and reads stable generation snapshots with bounded retries. It issues no halt/reset command, target verification algorithm or flash unlock. Standard debug attachment can still affect a physical system; generated commands are for deliberate later use, not offline testing.
+`tools/mailbox.py` checks the ARM ELF type, load ranges, entry/stack vector and mailbox symbol/section address/size before generating a Tcl file. Use the exact ELF that was flashed and the real MCU UID recorded after unprotection/POR. The generated file selects one exact ST-Link serial, checks DPIDR, full MCU IDCODE, every UID word and inactive protection, then compares all ELF flash load bytes before accessing mailbox RAM. Matching firmware alone does not identify a unit. It validates the live schema and reads stable generation snapshots with bounded retries.
+
+Native attachment uses a memory-only AP0 target with core examination deferred and the included examine-end write hook disabled before initialization. The final speed is 100 kHz. It requests no core examination, halt/reset, MCU MMIO write, target verification algorithm or flash unlock. Adapter/debug-port activity still occurs; offline configuration tests cannot exclude opaque physical effects. Select `--profile native-dapdirect` for upstream OpenOCD 0.12.0's native configuration, or the default `native-swd` for the newer native configuration described in the installation guide. No transport fallback occurs.
 
 ```sh
 python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
+  --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
   --output .local/status.tcl status
 python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
+  --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
   --output .local/set.tcl set 18.25
 python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
+  --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
   --output .local/select.tcl select 2
 python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
+  --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
   --output .local/get.tcl get
 ```
 
-These commands only write local files, refusing overwrites. They do not open USB or SWD. Keep generated files private because they contain the adapter serial. After authorization and review, execute one selected file with `openocd -f .local/status.tcl` (or the explicitly selected command file). `status` only reads RAM and flash; `get` publishes a mailbox GET request; `set` and `select` intentionally cause GPIO transactions. Never run these on stock firmware.
+These commands only write local files, refusing overwrites. They do not open USB or SWD. Keep generated files private because they contain unit identity. After authorization and review, execute one selected file with `openocd -f .local/status.tcl` (or the explicitly selected command file). `status` requests MCU identity/option, flash and RAM reads through the memory-only target; `get` publishes a mailbox GET request; `set` and `select` intentionally cause GPIO transactions. Never run these on stock firmware.
 
 | Index | SI | CLK | LE |
 | --- | --- | --- | --- |

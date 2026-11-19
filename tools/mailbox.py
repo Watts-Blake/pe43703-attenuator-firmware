@@ -6,6 +6,7 @@ import argparse
 import re
 from pathlib import Path
 from image import read_elf
+from swd import PROFILES, connection, mcu_guard
 
 MAGIC, VERSION, SIZE, CHECK = 0x50453433, 1, 128, 0xa5c35a3c
 MAPS = ((11, 12, 13), (11, 13, 12), (12, 11, 13), (12, 13, 11), (13, 11, 12), (13, 12, 11))
@@ -21,26 +22,11 @@ def parse_db(text):
     return int(whole)*4 + fraction//25
 
 
-def connection(serial):
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', serial):
-        raise ValueError('adapter serial must be an exact 1..64 character identifier')
-    return f'''# Generated offline. Running this file contacts exactly the selected adapter.
-source [find interface/stlink.cfg]
-transport select hla_swd
-adapter serial {{{serial}}}
-adapter speed 100
-source [find target/stm32f1x.cfg]
-gdb_port disabled
-tcl_port disabled
-telnet_port disabled
-init
-'''
-
-
 def image_guard(elf):
     # read_memory does not run target algorithms or halt the CPU.
     code = '''proc assert_bytes {address expected} {
     set actual [read_memory $address 8 [llength $expected]]
+    if {[llength $actual] != [llength $expected]} { error "short image read" }
     foreach a $actual e $expected {
         if {$a != $e} { error "running flash differs from selected ELF" }
     }
@@ -76,8 +62,8 @@ show_status $words
 '''
 
 
-def plan(elf, serial, action, value=None):
-    code = connection(serial) + image_guard(elf) + SNAPSHOT
+def plan(elf, serial, action, value=None, *, idcode, uid, profile='native-swd'):
+    code = connection(serial, profile) + mcu_guard(idcode, uid) + image_guard(elf) + SNAPSHOT
     if action == 'status':
         return code + 'shutdown\n'
     op = {'get': 1, 'set': 2, 'select': 3}[action]
@@ -114,6 +100,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--elf', type=Path, required=True)
     parser.add_argument('--serial', required=True)
+    parser.add_argument('--idcode', required=True)
+    parser.add_argument('--uid', required=True, help='actual MCU UID recorded after unprotection/POR')
+    parser.add_argument('--profile', choices=PROFILES, default='native-swd')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('action', choices=('status', 'get', 'set', 'select'))
     parser.add_argument('value', nargs='?')
@@ -121,7 +110,8 @@ def main():
     if (args.action in ('set', 'select')) != (args.value is not None):
         parser.error('set/select need one value; status/get take none')
     try:
-        text = plan(read_elf(args.elf), args.serial, args.action, args.value)
+        text = plan(read_elf(args.elf), args.serial, args.action, args.value,
+                    idcode=args.idcode, uid=args.uid, profile=args.profile)
         with args.output.open('x') as stream:
             stream.write(text)
     except (ValueError, OSError, IndexError) as error:
