@@ -130,6 +130,7 @@ static size_t response(char out[16], const char *prefix, uint32_t qdb) {
 }
 size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]) {
     line->adc = false; /* one request, consumed synchronously by the console */
+    line->oledprobe = false;
     if (rx_error) line->discard = true;
     if (ch == '\r' || ch == '\n') {
         if (!line->used && !line->discard) return 0;
@@ -144,6 +145,9 @@ size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]
             }
             else if (equal(line->data, "adc") || equal(line->data, "diag adc")) {
                 line->adc = true; valid = true;
+            }
+            else if (equal(line->data, "oledprobe")) {
+                line->oledprobe = true; valid = true;
             }
             else if (equal(line->data, "version")) {
                 const char reply[] = "version " APP_VERSION "\r\n";
@@ -169,4 +173,15 @@ size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]
     if (line->used == sizeof(line->data) - 1) line->discard = true;
     else line->data[line->used++] = ch;
     return 0;
+}
+bool tx_push(TxQueue *q, const char *data, size_t n) {
+    if (n > sizeof(q->data)-q->used) return false;
+    for (size_t i=0; i<n; ++i) {
+        q->data[q->write]=data[i]; q->write=(q->write+1u)&63u; ++q->used;
+    }
+    return true;
+}
+bool tx_pop(TxQueue *q, char *ch) {
+    if (!q->used) return false;
+    *ch=q->data[q->read]; q->read=(q->read+1u)&63u; --q->used; return true;
 }

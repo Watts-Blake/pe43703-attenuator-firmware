@@ -1,6 +1,16 @@
 # Validation record
 
-## v0.1.1 development ADC app — offline validation only
+## v0.1.1 development OLED probe — offline validation only
+
+The current development app adds the explicit `oledprobe` role sweep described in [the profile](oled-probe.md). It has not been installed or qualified on hardware. `make all test inspect` passes with Arm GCC 16.2.0: four C executables and 29 Python test methods run offline. The OLED executable also passes AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled.
+
+The app is 4,736 bytes (236 vectors + 4,500 text), with a 128-byte mailbox and no data/BSS. Thumb entry is `0x080021ad`, initial SP `0x20004ff8`, and all 59 vectors pass inspection. App BIN SHA256 is `c8698872a876c9a5366138e1d1dce98c7aeccfbf63de58f0cd880809d0095318`; ELF SHA256 is `80b635f1f605239b97844333a9faa1a846850577ee876100ea3d572415431af1`. Loader BIN/ELF remain byte-identical to v0.1.0 below. No release assets have been replaced.
+
+The executable model decodes the production SPI pin events across all 96 trials, including every role assignment, controller/mode index, initialization/pump command, white RAM image, page/column address and numbered pattern. It checks bit order, setup/high/low delays, reset pulses, complete sweep across timer wrap, default inactivity, busy refusal, cancellation in every mapping, and deadline cleanup despite TX backpressure. The actual bounded TX queue is exercised through repeated full/wrap cycles and simulated SET reception while an index line is transmitting. SET ends probe writes and applies the requested value. Existing RF framing, mailbox, ADC and update tests also pass.
+
+Disassembly confirms PA4–PA7-only GPIOA BSRR masks, idle-latch preload before output-mode enable, masked mode/latch restoration, the eight-bit SPI loop, finite trial/deadline checks, nonblocking queued TX and UART TC before loader reset. Boot zero still precedes UART enable. There are no undefined symbols or heap/runtime calls. Compiler stack reports and the static call paths stay below 768 bytes, versus the linker’s 2 KiB reservation; this is not a measured high-water mark. GPIO roles, OLED controller/supply compatibility, pad timing and visible output remain unqualified.
+
+## Earlier v0.1.1 ADC-only candidate — offline validation only
 
 The v0.1.1 development app adds explicit PA1 sampling and an app-version reply (`adc`, alias `diag adc`, plus `version`). It has not yet been installed or qualified on hardware. `make all test inspect` passes with Arm GCC 16.2.0; the ADC host test also passes AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled. The three C executables and 29 Python methods run offline, without physical device access.
 

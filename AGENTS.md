@@ -5,7 +5,7 @@
 - Loader/app layout, app-only USB updates and recovery: docs/usb-update.md; build/combined.bin is the initial SWD image.
 - `tools/install.py stage` and `tools/mailbox.py` generate plans offline. Installation `execute` and OpenOCD commands are device operations; keep them outside builds/tests. See docs/install.md.
 - Hardware qualification is recorded in docs/validation.md; do not equate a completed command with an RF measurement.
-- Input-only ADC diagnostics and their hardware limits: docs/diagnostics.md; firmware/adc.c owns ADC1 only during an explicit command.
+- Explicit diagnostic profiles and limits: docs/diagnostics.md (PA1 ADC) and docs/oled-probe.md (OLED role sweep); both are inactive at boot.
 - This repository is public. Generated plans contain unit/programmer identity and belong in ignored local directories, never commits.
 
 ## Maintaining this file

@@ -24,11 +24,17 @@ Primary definitions were inspected on 2026-11-19. The loader starts at hardware 
 
 FLASH_ACR prefetch and two wait states are written and read back before switching to HSE×9. AHB/APB2 are /1, APB1 /2, ADC /6. SysTick is a 24-bit free-running down-counter at the 72 MHz core clock, without interrupts; delays use masked unsigned subtraction and intervals shorter than one wrap. The 1 ms boot delay is a guard interval, not power-good measurement.
 
-PB11–PB13 output latches are preloaded low with one BSRR write before enabling 2 MHz push-pull outputs. Each transition updates only those pins via BSRR. PA4–PA7 remain reset inputs; no OLED protocol is inferred. USART1 uses PA9 AF push-pull and PA10 floating input; BRR=625 (`39 + 1/16`) gives 115200 at PCLK2=72 MHz. Reset CR2/CR3 and configured CR1 give 8N1 without flow control or interrupts. UART transmit waits are bounded; receive errors discard the current line. Clients must wait for each reply, since continuous pipelining can overrun this polling interface.
+PB11–PB13 output latches are preloaded low with one BSRR write before enabling 2 MHz push-pull outputs. Each transition updates only those pins via BSRR. PA4–PA7 remain reset inputs until an explicit OLED probe; its candidate assignments remain hypotheses. USART1 uses PA9 AF push-pull and PA10 floating input; BRR=625 (`39 + 1/16`) gives 115200 at PCLK2=72 MHz. Reset CR2/CR3 and configured CR1 give 8N1 without flow control or interrupts. UART transmit uses a bounded 64-byte queue, serviced without waiting for TXE; receive errors discard the current line. A loader handoff waits for the queued reply to drain, then waits boundedly for UART TC. Clients must wait for each reply, since continuous pipelining can overrun this polling interface.
 
 ## Input-only ADC diagnostic
 
 `firmware/adc.c` owns ADC1 only during an explicit `adc` / `diag adc` UART request. The parser delegates exactly that valid line to the synchronous bounded diagnostic; normal traffic does not access ADC or PA1. ADC1 is reset per request, channel 1 is sampled once at APB2/6 with 239.5-cycle acquisition, and cleanup restores PA1 plus the ADC clock/reset state on success or timeout. The driver refuses an already-enabled/reset ADC rather than destroying another owner’s state. The PE43703 controller and mailbox ABI are unchanged. See [diagnostic commands, timing and hardware limits](diagnostics.md).
+
+## OLED probe and UART scheduling
+
+The opt-in `firmware/oled.c` state machine tries 96 fixed role/controller combinations, one byte or control transition per main-loop pass. It never sleeps for a display hold. The main loop extends the existing SysTick down-counter into milliseconds using modular deltas; all active work units are shorter than its 233 ms wrap under the working-clock contract. A 210-second overall deadline applies even when TX output is backpressured. UART indices are announced before each trial, only when queue space is available.
+
+A 64-byte TX queue preserves whole queued lines while allowing RX processing between transmitted bytes. Before consuming an RX byte or announcing a trial, at least 16 free bytes are required for its maximum response. Output is nonblocking; UART TC still gates the final reset request after the queue drains. Valid SET/bootloader commands cancel the OLED task during console dispatch; successful mailbox SET/permutation commands cancel it in the same main-loop pass. OLED callbacks mask BSRR and mode/latch restoration to PA4–PA7. GPIOA's other modes and GPIOB's RF bus are untouched. See [profile, exact mappings, assumptions and timing](oled-probe.md).
 
 ## Destructive installation semantics
 
