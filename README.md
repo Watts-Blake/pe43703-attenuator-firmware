@@ -2,7 +2,11 @@
 
 **Display changes but attenuation doesn't? USB/serial commands have no effect, the PC software doesn't work, or the `wv` command gets no reply?** This project develops replacement firmware for a LiebeWH-style OLED digital programmable attenuator: the aluminium, SMA-to-SMA, STM32F103C8T6 + PE43703 board listed as a USB-programmable 0–31.75 dB, 0.25 dB-step, 6 GHz digital RF attenuator.
 
-**Status: offline implementation only. Firmware operation, wiring assignments and RF behavior are UNQUALIFIED on hardware.** No prebuilt release is offered yet. A BIN/HEX/checksum release is planned only after an actual unit has been flashed and verified. The advertised frequency range is a product description, not a measured performance claim.
+**Status: the earlier application was flashed, image-verified and tested through the SWD mailbox on one unit.** Mapping 0 produced the reversible RF responses below. The current build adds a UART bootloader and relocates the app; that new image is offline-tested and still awaits target flash/verify, CH340 set/get and one USB app-update test. No prebuilt release is offered before those checks pass. The advertised frequency range is a product description, not a measured performance claim.
+
+In that comparison, a phone reported about −85 dBm RSRP before a 20.00 dB command, then −103 dBm about 5 and 15 seconds afterward. After the zero command it returned to −85 dBm at both follow-up samples. This roughly 18 dB reported change supports control with SI=PB11, CLK=PB12, LE=PB13. Phone RSRP and the test enclosure do not establish calibrated attenuation accuracy, insertion loss or performance across the advertised frequency range.
+
+A separate 31.75 dB command produced about −108 dBm RSRP at samples roughly 7, 19 and 27 seconds into its 30-second hold, from a −85 dBm baseline. After zero, readings returned to −86 and −85 dBm roughly 10 and 20 seconds later. Reported SNR fell from about 23.8 dB to 2.4–3.0 dB and recovered. The approximately 23 dB RSRP drop is consistent with an enclosure leakage floor near −108 dBm; it does not establish 31.75 dB attenuation accuracy.
 
 ## Board and original-firmware symptoms
 
@@ -22,14 +26,15 @@ The text format comes from static inspection of the bundled tool in [att6000_con
 ## Replacement behavior
 
 - Boot requests and latches the **0.00 dB command** before accepting commands. This does not establish physical 0 dB or remove the PE43703's inherent insertion loss.
+- An 8 KiB UART bootloader at `0x08000000`; application at `0x08002000`, CRC commit page at `0x0800fc00`. App-only USB updates cannot address loader pages. See [USB update instructions](docs/usb-update.md).
 - USART1 on PA9/PA10, 115200 8N1: `set <dB>` replies `ok <dB>` after the complete serial transaction; `get` returns the last command issued. Neither is RF readback.
 - PE43703 address zero, full 16-bit frame, quarter-dB steps, LSB first, rising CLK sampling and an LE pulse. No display or button driver in v1; use the display detached for initial qualification. PA4–PA7 stay at reset input levels.
-- All six SI/CLK/LE permutations across PB11/PB12/PB13 can be selected using the SWD RAM mailbox. The default is an explicit **hypothesis**, SI=PB11, CLK=PB12, LE=PB13. Read mailbox status to confirm the mapping selected.
+- Normal operation uses mapping 0: SI=PB11, CLK=PB12, LE=PB13. Boot always selects it; the production UART interface cannot change it. Alternative mappings remain available only through the SWD debug mailbox with explicit `--debug-select`. Read status before testing; GPIO-to-chip continuity remains untraced.
 - Assumed 8 MHz HSE crystal → 72 MHz CPU/APB2, 36 MHz APB1. HSE is a design assumption, not a measured oscillator frequency. Clock startup fails closed with a readable mailbox fault; no attenuation command is accepted in that state.
 
 | Pins | v1 use | Qualification |
 | --- | --- | --- |
-| PB11/PB12/PB13 | SI/CLK/LE in selectable order | Output-configuration candidates; connections not traced to the RF chip |
+| PB11/PB12/PB13 | SI/CLK/LE in selectable order | Mapping 0 functionally tested on one unit; connections not continuity-traced |
 | PA4–PA7 | Idle floating inputs | Possible display role is a hypothesis; protocol unknown |
 | PA9 / PA10 | USART1 TX / RX | Intended replacement interface; board UART traces unverified |
 | PA13 / PA14 | SWDIO / SWCLK | Preserve SWD; no debug-port remap |
@@ -46,7 +51,7 @@ make test
 make inspect
 ```
 
-The ELF, BIN, HEX, map and disassembly are written to `build/`. The linker restricts flash to 64 KiB and RAM to 20 KiB, with a 2 KiB minimum stack reserve. Tests use a simulated GPIO bus and Tcl memory model. They never launch OpenOCD or access USB, UART or SWD. [Validation notes](docs/validation.md) describe coverage and what remains untested.
+ELF, BIN, HEX, map and disassembly files are written to `build/` for both loader and app. `combined.bin`/`.hex` contain the loader, app and committed CRC metadata for initial SWD installation; `attenuator.bin` is the app-only USB update. The 64 KiB flash layout reserves 8 KiB for the loader, 55 KiB for app and 1 KiB for metadata. RAM reserves eight bytes for the reset request and at least 2 KiB for stack. Tests use simulated GPIO/flash, a Tcl model and a local pseudo-terminal. They never launch OpenOCD or contact a physical USB, UART or SWD device. [Validation notes](docs/validation.md) describe coverage and what remains untested.
 
 ## USB serial use after hardware qualification
 
@@ -63,7 +68,7 @@ ok 0.00
 
 Commands accept CR, LF or CRLF. Values must be 0–31.75 dB in exact 0.25 dB steps, with one or two digits before the optional decimal point and up to two after it. Responses always use two decimal places and CRLF. Invalid syntax, range, overlong input or UART errors return `err` at the line boundary without applying that line. A partial line occupies at most 31 bytes and waits for its terminator. An overlong/bad line is discarded through its terminator; then a fresh command can be sent. There is no command echo, unsolicited boot banner or persistent setting storage.
 
-**USB updates:** the CH340 is a USB-to-UART bridge, not native USB DFU. V1 has no USB bootloader. Later firmware updates still need SWD. A USB update path is future work **when a bootloader is added and qualified**; no present USB-only update capability is promised.
+**USB updates:** the CH340 is a USB-to-UART bridge. The new UART loader is implemented but awaits hardware qualification. After initial SWD installation of the combined image, `tools/usb_update.py` requests app entry with `bootloader`, uploads an app-only image, verifies CRC and checks `get` after restart. See the [update and recovery guide](docs/usb-update.md). Keep SWD available until both USB commands and an app update have been tested on the unit.
 
 ## FAQ
 

@@ -134,7 +134,13 @@ size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]
         line->data[line->used] = 0;
         uint32_t qdb; bool valid = false; size_t n = 0;
         if (!line->discard) {
-            if (equal(line->data, "get")) { n = response(out, "", c->qdb); valid = true; }
+            if (equal(line->data, "bootloader")) {
+                controller_set(c, 0); line->bootloader = true;
+                const char reply[] = "ok bootloader\r\n";
+                for (size_t i=0; i<sizeof(reply); ++i) out[i]=reply[i];
+                n=sizeof(reply)-1; valid=true;
+            }
+            else if (equal(line->data, "get")) { n = response(out, "", c->qdb); valid = true; }
             else if (line->used > 4 && line->data[0] == 's' && line->data[1] == 'e' &&
                      line->data[2] == 't' && line->data[3] == ' ' &&
                      parse_db(line->data + 4, &qdb)) {

@@ -4,7 +4,7 @@ The ELF exports `mailbox`, a 128-byte, 4-byte-aligned structure at `0x20000000`.
 
 ## Offline command staging
 
-`tools/mailbox.py` checks the ARM ELF type, load ranges, entry/stack vector and mailbox symbol/section address/size before generating a Tcl file. Use the exact ELF that was flashed and the real MCU UID recorded after unprotection/POR. The generated file selects one exact ST-Link serial, checks DPIDR, full MCU IDCODE, every UID word and inactive protection, then compares all ELF flash load bytes before accessing mailbox RAM. Matching firmware alone does not identify a unit. It validates the live schema and reads stable generation snapshots with bounded retries.
+`tools/mailbox.py` checks the ARM ELF type, load ranges, entry/stack vector and mailbox symbol/section address/size before generating a Tcl file. Use the exact ELF that was flashed and the real MCU UID recorded after unprotection/POR. The generated file selects one exact ST-Link serial, checks DPIDR, full MCU IDCODE, every UID word and inactive protection, then compares all ELF flash load bytes in reads of at most 64 bytes before accessing mailbox RAM. This bounds individual transfers at 100 kHz without skipping any image bytes; RPC clients should also bound each call and the total session. Matching firmware alone does not identify a unit. It validates the live schema and reads stable generation snapshots with bounded retries.
 
 Native attachment uses a memory-only AP0 target with core examination deferred and the included examine-end write hook disabled before initialization. The final speed is 100 kHz. It requests no core examination, halt/reset, MCU MMIO write, target verification algorithm or flash unlock. Adapter/debug-port activity still occurs; offline configuration tests cannot exclude opaque physical effects. Select `--profile native-dapdirect` for upstream OpenOCD 0.12.0's native configuration, or the default `native-swd` for the newer native configuration described in the installation guide. No transport fallback occurs.
 
@@ -17,7 +17,7 @@ python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
   --output .local/set.tcl set 18.25
 python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
   --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
-  --output .local/select.tcl select 2
+  --debug-select --output .local/select.tcl select 2
 python3 tools/mailbox.py --elf build/attenuator.elf --serial "$STLINK_SERIAL" \
   --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
   --output .local/get.tcl get
@@ -27,14 +27,14 @@ These commands only write local files, refusing overwrites. They do not open USB
 
 | Index | SI | CLK | LE |
 | --- | --- | --- | --- |
-| 0, boot hypothesis | PB11 | PB12 | PB13 |
+| 0, normal boot default | PB11 | PB12 | PB13 |
 | 1 | PB11 | PB13 | PB12 |
 | 2 | PB12 | PB11 | PB13 |
 | 3 | PB12 | PB13 | PB11 |
 | 4 | PB13 | PB11 | PB12 |
 | 5 | PB13 | PB12 | PB11 |
 
-Changing mapping completes at the main loop boundary. Every transaction ends with all three wires low; mapping changes software masks while all wires remain low, waits, and retransmits the current value with the new mapping. No GPIO mode changes or LE rising edge are introduced by the mask switch itself. These guarantees apply to the selected logical mapping. An incorrect hypothesis can put clock/data pulses on the actual LE wire: establish physical wiring before qualifying behavior. All mappings remain untraced hypotheses.
+Changing mapping completes at the main loop boundary. Every transaction ends with all three wires low; mapping changes software masks while all wires remain low, waits, and retransmits the current value with the new mapping. No GPIO mode changes or LE rising edge are introduced by the mask switch itself. These guarantees apply to the selected logical mapping. An incorrect hypothesis can put clock/data pulses on the actual LE wire: establish physical wiring before qualifying behavior. Mapping 0 has a reversible RF comparison on one unit; alternative mappings remain unqualified. None is continuity-traced. The normal UART protocol cannot change mapping; SWD selection is a debug function requiring explicit `--debug-select` in the host tool.
 
 After a write, status prints the acknowledgment sequence, status code, result value in quarter-dB units, result mapping and issued transaction count, plus live last value/mapping/count. The selected mapping is printed as explicit SI/CLK/LE PB pin numbers. Require this readback rather than assuming a selection succeeded. `issued=1` after a successful boot is the zero command; GET does not increment it. Status can report a clock/CPU fault; write plans refuse any state other than ready.
 

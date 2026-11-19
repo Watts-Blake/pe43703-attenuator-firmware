@@ -3,11 +3,12 @@ import hashlib
 import struct
 from pathlib import Path
 
-FLASH, FLASH_END = 0x08000000, 0x08010000
-RAM, RAM_END = 0x20000000, 0x20005000
+FLASH, FLASH_END = 0x08002000, 0x0800fc00
+RAM, RAM_END = 0x20000000, 0x20004ff8
 
 
-def read_elf(path):
+def read_elf(path, loader=False):
+    first, last = (0x08000000, 0x08002000) if loader else (FLASH, FLASH_END)
     data = Path(path).read_bytes()
     if len(data) < 52 or data[:7] != b'\x7fELF\x01\x01\x01':
         raise ValueError('expected little-endian ELF32')
@@ -44,33 +45,33 @@ def read_elf(path):
         if filesz > memsz:
             raise ValueError('bad load sizes')
         if filesz:
-            if not FLASH <= physical < physical + filesz <= FLASH_END:
-                raise ValueError('load image outside 64 KiB flash')
+            if not first <= physical < physical + filesz <= last:
+                raise ValueError('load image outside selected loader/app flash region')
             loads.append((physical, take(off, filesz)))
-        if memsz and not (FLASH <= virtual < virtual + memsz <= FLASH_END or
+        if memsz and not (first <= virtual < virtual + memsz <= last or
                           RAM <= virtual < virtual + memsz <= RAM_END):
             raise ValueError('load segment outside target memory')
     loads.sort()
-    if not loads or loads[0][0] != FLASH or len(loads[0][1]) < 236:
+    if not loads or loads[0][0] != first or len(loads[0][1]) < 236:
         raise ValueError('missing vector table')
     stack, reset = struct.unpack_from('<II', loads[0][1])
     if stack != RAM_END or not reset & 1 or reset != entry:
         raise ValueError('bad reset vector/entry/stack')
-    if not FLASH <= reset & ~1 < FLASH_END:
+    if not first <= reset & ~1 < last:
         raise ValueError('reset outside flash')
-    if symbols.get('mailbox', ())[:2] != (RAM, 128):
+    if not loader and symbols.get('mailbox', ())[:2] != (RAM, 128):
         raise ValueError('mailbox symbol/address/size mismatch')
     mb = by_name.get('.mailbox')
-    if not mb or mb[1] != 8 or mb[3] != RAM or mb[5] != 128:
+    if not loader and (not mb or mb[1] != 8 or mb[3] != RAM or mb[5] != 128):
         raise ValueError('mailbox must be NOBITS at RAM base')
     end = max(addr + len(blob) for addr, blob in loads)
-    image = bytearray(end - FLASH)
+    image = bytearray(end - first)
     covered = set()
     for addr, blob in loads:
-        indexes = set(range(addr-FLASH, addr-FLASH+len(blob)))
+        indexes = set(range(addr-first, addr-first+len(blob)))
         if covered & indexes:
             raise ValueError('overlapping flash loads')
         covered |= indexes
-        image[addr-FLASH:addr-FLASH+len(blob)] = blob
-    return {'entry': entry, 'stack': stack, 'loads': loads, 'binary': bytes(image),
+        image[addr-first:addr-first+len(blob)] = blob
+    return {'base': first, 'limit': last, 'entry': entry, 'stack': stack, 'loads': loads, 'binary': bytes(image),
             'symbols': symbols, 'sha256': hashlib.sha256(data).hexdigest()}

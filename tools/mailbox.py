@@ -33,7 +33,9 @@ def image_guard(elf):
 }
 '''
     for address, blob in elf['loads']:
-        code += f'assert_bytes 0x{address:08x} {{' + ' '.join(str(b) for b in blob) + '}\n'
+        for offset in range(0, len(blob), 64):
+            chunk = blob[offset:offset+64]
+            code += f'assert_bytes 0x{address+offset:08x} {{' + ' '.join(str(b) for b in chunk) + '}\n'
     return code
 
 
@@ -62,7 +64,9 @@ show_status $words
 '''
 
 
-def plan(elf, serial, action, value=None, *, idcode, uid, profile='native-swd'):
+def plan(elf, serial, action, value=None, *, idcode, uid, profile='native-swd', debug_select=False):
+    if action == 'select' and not debug_select:
+        raise ValueError('mapping selection is debug-only; explicitly enable --debug-select')
     code = connection(serial, profile) + mcu_guard(idcode, uid) + image_guard(elf) + SNAPSHOT
     if action == 'status':
         return code + 'shutdown\n'
@@ -103,6 +107,7 @@ def main():
     parser.add_argument('--idcode', required=True)
     parser.add_argument('--uid', required=True, help='actual MCU UID recorded after unprotection/POR')
     parser.add_argument('--profile', choices=PROFILES, default='native-swd')
+    parser.add_argument('--debug-select', action='store_true', help='enable SWD-only mapping diagnostics')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('action', choices=('status', 'get', 'set', 'select'))
     parser.add_argument('value', nargs='?')
@@ -111,7 +116,7 @@ def main():
         parser.error('set/select need one value; status/get take none')
     try:
         text = plan(read_elf(args.elf), args.serial, args.action, args.value,
-                    idcode=args.idcode, uid=args.uid, profile=args.profile)
+                    idcode=args.idcode, uid=args.uid, profile=args.profile, debug_select=args.debug_select)
         with args.output.open('x') as stream:
             stream.write(text)
     except (ValueError, OSError, IndexError) as error:
