@@ -1,6 +1,6 @@
 # v0.1.1 input diagnostics (development)
 
-The v0.1.1 development app adds an explicit PA1 input diagnostic. It has passed offline tests; it has not yet been installed or qualified on a board. The published v0.1.0 binaries do not include this command. Buttons remain inert and the OLED remains blank.
+The v0.1.1 development app adds an explicit PA1 input diagnostic. It has passed offline tests; it has not yet been installed or qualified on a board. The published v0.1.0 binaries do not include this command. Buttons remain inert. The OLED stays idle unless the separate [role probe](oled-probe.md) is explicitly requested.
 
 Send one command at a time at 115200 8N1, waiting for the full reply:
 
@@ -21,4 +21,4 @@ The implementation follows ST's [RM0008 Rev21](https://www.st.com/resource/en/re
 
 `make test` executes the actual diagnostic register sequence against a host model. It checks all 4096 sample values, calibration ordering, stale calibration-data rejection, one-conversion completion, bounded stuck flags and cleanup, unexpected ownership/clock refusal, malformed/overflow/receive-error recovery, unchanged RF state and a subsequent `set`. These tests establish software behavior, not physical button mapping or ADC accuracy.
 
-The OLED controller, PA4–PA7 signal roles, reset/chip-select wiring and panel supply arrangement remain unidentified. There is no OLED initialization or probe command in this app. Those facts must be established before selecting an SSD1306 or SH1106 initialization sequence.
+The OLED controller, PA4–PA7 signal roles, reset/chip-select wiring and panel supply arrangement remain unidentified. The separate [OLED role probe](oled-probe.md) tries fixed SSD1306/SH1106 profiles under its stated electrical and geometry assumptions; it does not establish those facts or affect ADC sampling.
