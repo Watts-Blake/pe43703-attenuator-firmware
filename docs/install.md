@@ -1,6 +1,6 @@
 # Installation on a stock STM32F103C8T6 + PE43703 board
 
-One unit has completed standard-driver RDP removal, actual power cycling, post-POR identity checks, image flash/verification and a permutation-0 mailbox/RF comparison. USB serial testing remains pending. These results apply to that unit; verify wiring and power on every board before installing.
+One unit has completed standard-driver RDP removal, actual power cycling, post-POR identity checks, image flash/verification and a permutation-0 mailbox/RF comparison. The current loader/app also passed USB set/get and one same-image app update on that unit; see the [qualification record](validation.md). These results apply to that unit; verify wiring and power on every board before installing.
 
 ## Equipment and disassembly
 
@@ -158,7 +158,7 @@ python3 tools/install.py execute --directory .local/program-plan --phase start
 
 The distinct `RESET-START` confirmation permits verification followed by `reset run`. Boot requests 0.00 dB with default permutation 0. Use [mailbox status](mailbox.md) with the exact post-POR UID to read state, selected mapping and issued count. Neither image verification nor mailbox acknowledgment establishes RF attenuation.
 
-After hardware qualification, disconnect programmer power before reconnecting USB. Reassemble without pinching wires or the OLED ribbon, then use CH340 serial `set`/`get`. V1 omits display/button support. **The current UART loader awaits target qualification.** After the combined image passes SWD verification and initial USB commands, test an app-only USB update before removing programmer access. See [USB update/recovery](usb-update.md). Never flash `attenuator.bin` at `0x08000000`; it is linked for `0x08002000` and requires the loader and metadata.
+After hardware qualification, disconnect programmer power before reconnecting USB. Reassemble without pinching wires or the OLED ribbon, then use CH340 serial `set`/`get`. V1 omits display/button support. The current loader/app passed SWD verification, USB set/get and one same-image app update on one examined unit; see the [qualification limits](validation.md). On a new unit, verify the combined image, USB commands and an app-only update before removing programmer access. Prebuilt files and checksums are available in [v0.1.0](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0). See [USB update/recovery](usb-update.md). Never flash `attenuator.bin` at `0x08000000`; it is linked for `0x08002000` and requires the loader and metadata.
 
 ## Troubleshooting
 

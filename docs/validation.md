@@ -1,6 +1,6 @@
 # Validation record
 
-## Current loader/app candidate — offline validation only
+## Current loader/app — single-unit qualification
 
 Built with `arm-none-eabi-gcc (GCC) 16.2.0`, Cortex-M3 Thumb, freestanding C11, `-Os`, warnings as errors, no runtime library. `make all test inspect` passes. Initial SP for both images is `0x20004ff8`; both linkers exclude the top eight RAM bytes and reserve at least 2 KiB stack. All 59 vectors in each actual ELF/BIN pair are checked, with zero reserved core entries. No undefined symbols or heap/runtime calls.
 
@@ -15,9 +15,42 @@ HEX SHA256: loader `1082fa00a444d7f125510a672f2751ef835ba7d9338df024128c0ef14f7b
 
 Disassembly confirms loader page/halfword range and alignment checks before flash unlock; `strh` programming and readback; EOP/error checks and lock restoration; loader BRR=69; app BRR=625; UART TC wait before request/reset or app handoff; VTOR=`0x08002000`, DSB/ISB, and the final MSP load/Thumb branch. App boot still issues mapping-0 zero before command reception. Compiler stack reports 304 bytes for loader reset, 144 for its parser and at most 48 in its CRC/validation helpers; the deepest static path is below 640 bytes. App reset is 120 bytes, below 256 for its deepest static path. These are static estimates, not measured stack high-water marks.
 
-The existing C GPIO/parser/mailbox suite passes, including the new bootloader command issuing zero before its acknowledgment/request flag. A second C executable models flash and fails every erase/program operation in turn, checking invalidation, commit-last behavior, no loader writes, invalid-app run refusal and explicit recovery. It tests malformed/range/alignment/overflow input, sequential writes, incomplete lines, receive errors, CRC/vector corruption and actual generated combined-image validity. It independently validates Python/zlib's metadata CRC. Twenty-nine Python test methods include the installation model described below, deterministic bundle layout, malformed app rejection before transport, bounded serial failures and the real POSIX serial adapter against a local pseudo-terminal with fragmented replies and exact uploaded bytes. No physical serial port is used. Both C executables also pass AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled.
+The existing C GPIO/parser/mailbox suite passes, including the new bootloader command issuing zero before its acknowledgment/request flag. A second C executable models flash and fails every erase/program operation in turn, checking invalidation, commit-last behavior, no loader writes, invalid-app run refusal and explicit recovery. It tests malformed/range/alignment/overflow input, sequential writes, incomplete lines, receive errors, CRC/vector corruption and actual generated combined-image validity. It independently validates Python/zlib's metadata CRC. Twenty-nine Python test methods include the installation model described below, deterministic bundle layout, malformed app rejection before transport, bounded serial failures and the real POSIX serial adapter against a local pseudo-terminal with fragmented replies and exact uploaded bytes. These offline tests use no physical serial port. Both C executables also pass AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled.
 
-The current images have **not** yet been flashed or verified on the unit. Required next checks: independent review, combined-image SWD flash/verify and issued zero, then CH340 set/get and one app-only USB update with post-update zero. Prebuilt release remains gated on those hardware checks. Historical RF evidence below applies to the earlier image, not this relocated candidate.
+The current combined image passed independent offline review, SWD flash and separate verification on one examined unit. After start, all 65,536 flash bytes were compared with the combined image through bounded reads, including loader, app, metadata and padding. The fresh mailbox reported requested zero on mapping 0 with one issued transaction; GET confirmed it.
+
+With the display/button board reconnected and sole USB power, the CH340 link passed this exact sequence at 115200 8N1:
+
+| Request | Exact reply | Observation |
+| --- | --- | --- |
+| `get\n` | `0.00\r\n` | Initial requested zero |
+| `set 20.00\n` | `ok 20.00\r\n` | Held for 20.000110984 seconds using a monotonic deadline |
+| `set 0\n` | `ok 0.00\r\n` | Returned to requested zero |
+| `get\n` | `0.00\r\n` | Confirmed zero |
+
+One same-image USB app update then passed: `bootloader` acknowledgment, exact loader version/geometry, 2,156 bytes in 34 sequential chunks (33 × 64 + 44), `finish` acknowledgment after CRC validation/commit, `run` acknowledgment, and app `get` replying `0.00\r\n`. The 40 transmitted request/reply pairs reconstruct the exact app BIN SHA256 listed above, with CRC32 `3b1d60e6`. Both serial sessions closed and the port was released. A later closed-enclosure USB test acknowledged 31.75 dB for 30.000111239 seconds, returned to zero with GET confirmation, then acknowledged 20.00 dB for 20.000108550 seconds and returned to confirmed zero again. The port was released; these UART results alone do not establish RF attenuation.
+
+This was a same-image erase/write/CRC/start test. It does not prove a different-version upgrade, authenticated firmware, independent post-USB flash readback or physical interrupted-update recovery. CRC is an integrity check, not authentication. No SWD readback was performed after the USB update. Command acknowledgment and GET are not RF measurements.
+
+[v0.1.0](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0) publishes the six BIN/HEX files and `SHA256SUMS`. All seven downloaded files were compared with the approved artifacts and all six image checksums passed. Assets were built from [6ed560c](https://github.com/Watts-Blake/pe43703-attenuator-firmware/commit/6ed560c7684230b8fd2d0c95c9c90999d3f3609f); the release target [5df8ea6](https://github.com/Watts-Blake/pe43703-attenuator-firmware/commit/5df8ea63036cb79eda40330bc25da7e1e4d4cf5d) has identical firmware, tools and Makefile. The earlier-application section records qualification of the preceding app image.
+
+### Closed-enclosure USB staircase and phone observations
+
+After the same-image USB update, an initial GET confirmed requested zero. The following nine settings were issued in order, each acknowledged and held for at least 15 seconds using a monotonic deadline. There were no intermediate zero commands. Final SET0/GET0 confirmed requested zero, then the serial port was closed and released.
+
+| Requested dB | Reported RSRP (dBm) | Drop from initial zero (dB) |
+| --- | --- | --- |
+| 0.00 | −85 | 0 |
+| 10.00 | −95 | 10 |
+| 15.00 | −101 | 16 |
+| 20.00 | −105 | 20 |
+| 22.00 | −107 | 22 |
+| 25.00 | −109 | 24 |
+| 28.00 | −110 | 25 |
+| 30.00 | −110 | 25 |
+| 31.75 | −110 | 25 |
+
+The relative observed response was within about 1 dB of the requested change through roughly 22–25 dB. At the highest settings, RSRP flattened near −110 dBm while reported SNR fell from about 21 dB toward 0 dB. This saturation is consistent with the phone measurement/noise floor. Phone RSRP/SNR alone cannot identify the limiting path or exclude RF leakage; these results do not establish calibrated attenuation accuracy, insertion loss or frequency response. The earlier enclosure-leakage interpretation in the README is historical, not a demonstrated explanation of either test.
 
 ## Earlier application — single-unit evidence
 
@@ -44,6 +77,6 @@ Executable offline coverage:
 - Twenty-four Python test methods cover image/plan corruption, exact parsing, explicit execution confirmation and the two-stage identity policy. Generated Tcl runs under a local memory/driver model while sourcing the actual unmodified OpenOCD target/interface/helper scripts. The model reproduces the original examine-end write, then verifies deferred memory-only attachment, suppression of that hook and effective 100 kHz for both native profiles. It checks status/GET/SET/all mappings, wrong-MCU IDCODE/UID with an identical image, unavailable post-POR UID, wrong image/schema/state, coherent-read limits and sequence/pending-command guards.
 - Installation tests execute protected peripheral identity collection without UID/density access, explicit physical-identity erase, post-POR UID collection, and UID-bound flash/verify/start. They inject OBR/WRPR read failure before mutation, deferred examination invalidation on reset, driver busy/erase/program/bus failures, failed verification, exit-zero error transcripts, missing success evidence and subprocess timeout. The model prohibits protected raw-option reads, verifies the standard driver path, allows only known marked probe-density diagnostics, and rejects image mismatches at transfer boundaries. Mapping selection requires explicit debug opt-in. Raw transcripts/unknown completion are retained and a consumed attempt refuses replay. OpenOCD is never launched by tests; printed device-phase events come from injected local runners.
 
-Hardware evidence on one unit: the standard OpenOCD driver completed unprotection; an actual power cycle and post-POR RDP0/OPTERR0, real UID and 64 KiB density checks passed. The listed BIN was flashed and independently verified. With the core running, full image comparison in 64-byte reads and a fresh 128-byte mailbox snapshot passed. Mapping 0 acknowledged SET20.00 dB, a monotonic 20-second hold, SET0 and final GET0. The RF comparison is summarized in the README and is not a calibrated attenuation measurement. The current loader/app build changes these image bytes and therefore requires fresh target qualification.
+Hardware evidence on one unit: the standard OpenOCD driver completed unprotection; an actual power cycle and post-POR RDP0/OPTERR0, real UID and 64 KiB density checks passed. The listed BIN was flashed and independently verified. With the core running, full image comparison in 64-byte reads and a fresh 128-byte mailbox snapshot passed. Mapping 0 acknowledged SET20.00 dB, a monotonic 20-second hold, SET0 and final GET0. The RF comparison is summarized in the README and is not a calibrated attenuation measurement. The current loader/app image has the separate qualification record above.
 
-Still unqualified: CH340/UART electrical communication and USB command replies; GPIO/UART continuity; measured oscillator and pad timing/voltage; display interface; physical insertion loss, attenuation accuracy and frequency range. Other mapping permutations are debug-only and unqualified. A BIN/HEX/checksum release waits for current-image flash/verify, USB set/get and a USB app update. The stock image has no backup or restoration path. Configuration/driver models do not establish absence of opaque adapter effects or real hardware behavior on other boards.
+Still unqualified: GPIO/UART continuity; oscillator and pad timing/voltage measurements; UART operation across supply/temperature limits; display interface; physical interrupted-update recovery; insertion loss, calibrated attenuation accuracy and frequency range. Other mapping permutations and other board variants remain unqualified. The one-unit USB results above do not remove those limits. The stock image has no backup or restoration path. Configuration/driver models do not establish absence of opaque adapter effects or real hardware behavior on other boards.

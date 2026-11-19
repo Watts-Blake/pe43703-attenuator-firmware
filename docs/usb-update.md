@@ -1,6 +1,6 @@
 # UART bootloader and USB app updates
 
-The current loader is implemented and offline-tested. Its target flash/verify, CH340 serial commands and one USB app update are still pending. Retain SWD access until those checks pass. OLED/buttons remain unsupported; future app updates can add them without replacing the loader.
+The combined loader/app image passed SWD flash and independent verification, CH340 set/get and one same-image USB app update on one examined unit. The 2,156-byte app transferred in 34 chunks, the loader acknowledged CRC completion, and GET returned requested zero after app start. See the [qualification record](validation.md) and [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0). Retain SWD access until those checks pass on the particular board. OLED/buttons remain unsupported.
 
 ## Images and memory
 
@@ -36,6 +36,8 @@ One command is outstanding at a time. The tool checks the exact loader version/g
 
 ## Interrupted update and recovery
 
+The following recovery behavior is implemented and covered by offline flash-failure models. Physical power-interruption recovery was not exercised on the examined unit. The successful USB test uploaded the same app image; it did not test a different-version upgrade or independently read back flash after USB.
+
 The app command `bootloader` first issues zero, replies `ok bootloader` with CRLF, waits for UART transmit completion, writes a magic/complement pair in reserved RAM and requests a system reset. The loader consumes and clears this request. A normal reset jumps immediately to a valid app; there is no startup entry window. An invalid or interrupted app remains in the loader indefinitely, ready for a new **explicit operator-initiated** upload:
 
 ```sh
@@ -62,4 +64,4 @@ While waiting in the loader, an unterminated line uses at most 159 bytes and has
 
 CRC is reflected CRC-32/ISO-HDLC, polynomial `0xedb88320`, initial `0xffffffff`, final XOR `0xffffffff`, matching Python `zlib.crc32`. Both the protocol layer and hardware flash callbacks reject loader/out-of-flash addresses; neither exposes an arbitrary-address write/erase command. Hardware callbacks verify erased pages, halfword programming, EOP and PGERR/WRPRTERR. No option-byte code is present in the loader. These operations follow [ST PM0075 Rev 2 §2.3.2–2.3.4](https://www.st.com/resource/en/programming_manual/pm0075-stm32f10xxx-flash-memory-microcontrollers-stmicroelectronics.pdf).
 
-The loader runs on reset HSI 8 MHz with USART1 BRR=69 (nominal 115942 baud, +0.64% before oscillator tolerance); the app uses its assumed HSE 8 MHz → 72 MHz clock and exact BRR=625. Loader UART tolerance must be qualified on the actual board. PA4–PA7 remain idle throughout. Flash/software tests do not qualify power-failure behavior on physical silicon, serial wiring or RF behavior.
+The loader runs on reset HSI 8 MHz with USART1 BRR=69 (nominal 115942 baud, +0.64% before oscillator tolerance); the app uses its assumed HSE 8 MHz → 72 MHz clock and exact BRR=625. Loader/app UART communication passed on one examined board. Supply/temperature tolerance, measured clock accuracy, physical power-failure recovery and other boards remain unqualified. PA4–PA7 remain idle throughout. UART replies and CRC completion do not measure RF behavior.
