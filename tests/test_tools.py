@@ -11,8 +11,8 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
 from image import read_elf
-from mailbox import parse_db, plan
-from install import stage, execute, confirmation, tcl_plan, option_values, identity_plan
+from mailbox import parse_db, plan, image_guard
+from install import stage, execute, confirmation, tcl_plan, identity_plan, checked_transcript
 
 ELF = Path(__file__).resolve().parents[1]/'build/attenuator.elf'
 FIXTURES = Path(__file__).resolve().parent/'fixtures/openocd-012'
@@ -46,7 +46,7 @@ class Images(unittest.TestCase):
 
 
 # Real included OpenOCD scripts execute below. Only low-level physical commands
-# are stubbed, including the modeled normal-examination hook and FPEC hardware.
+# are stubbed, including the modeled normal-examination hook and standard-driver outcomes.
 # This tests configured effects; it cannot prove absence of opaque adapter effects.
 TCL_MODEL = r'''
 proc find {x} {global fixtures; return "$fixtures/$x"}
@@ -58,6 +58,8 @@ set selected {}
 set driver {}
 set hook {}
 set initializations 0
+set bank_size 0
+set probed 0
 proc adapter {op args} {
     global speed driver
     if {$op eq "speed"} {set speed [lindex $args 0]}
@@ -76,7 +78,19 @@ proc cortex_m {args} {}
 proc reset_config {args} {}
 proc tpiu {args} {}
 proc stm32f1x.tpiu {args} {}
-proc flash {args} {if {[lindex $args 0] ne "bank"} {puts "FLASH $args"}}
+proc capture {command} {return [uplevel 1 $command]}
+proc flash {args} {
+    global bank_size probed bad
+    if {[lindex $args 0] eq "bank"} {set bank_size [lindex $args 4]; return}
+    if {[lindex $args 0] eq "probe"} {
+        if {$bad eq "probe-return"} {error "probe transport failure"}
+        if {$bad eq "probe-other"} {return "Error: wrong bank"}
+        set probed 1
+        puts DENSITY_PROBE_BLOCKED
+        return "Error: Failed to read memory at 0x1ffff7e0\nWarn : STM32 flash size failed, probe inaccurate - assuming 128k flash\nInfo : ignoring flash probed value, using configured bank size\nInfo : flash size = [expr {$bank_size/1024}] KiB"
+    }
+    puts "FLASH $args"
+}
 proc add_usage_text {args} {}
 proc add_help_text {args} {}
 proc target {args} {}
@@ -122,7 +136,23 @@ proc halt {args} {
     puts HALTED
 }
 proc verify_image {args} {global bad; if {$bad eq "verify"} {error "verify failed"}; puts VERIFY}
-proc stm32f1x {args} {error "unsafe unlock handler must never run"}
+proc stm32f1x {args} {
+    global probed bad obr wrpr
+    if {$args ne "unlock 0" || !$probed} {error "unexpected driver command"}
+    puts DRIVER_UNLOCK
+    if {$bad eq "busy"} {error "busy timeout"}
+    if {$bad eq "driver-option-read"} {return "Error: failed OBR read\nstm32x unlocked."}
+    puts OPTION_ERASE
+    if {$bad eq "erase-fail"} {return "stm32x failed to erase options"}
+    if {$bad eq "write-fail"} {return "stm32x failed to unlock device"}
+    if {$bad eq "write-transport"} {error "option bus failure"}
+    if {$bad eq "missing-marker"} {return ""}
+    # Model the driver's snapshot restoration, not direct raw-option reads.
+    set bytes [list 165 [expr {($obr>>2)&255}] [expr {($obr>>10)&255}] [expr {($obr>>18)&255}]]
+    foreach shift {0 8 16 24} {lappend bytes [expr {($wrpr>>$shift)&255}]}
+    puts "RESTORED_OPTIONS $bytes"
+    return "stm32x unlocked.\nINFO: a reset or power cycle is required for the new settings to take effect."
+}
 for {set i 0} {$i < 32} {incr i} {set mem($i) 0}
 set mem(0) 0x50453433
 set mem(1) 1
@@ -134,16 +164,18 @@ set bad none
 set phase mailbox
 set reads 0
 set torn 0
-set sr 0
-set cr 0x80
 set obr 0x03fffffc
 set wrpr 0xffffffff
-set opt(0) 0x5aa5
-for {set i 1} {$i < 8} {incr i} {set opt($i) 0x00ff}
 proc read_memory {address width count} {
-    global mem image reads torn bad phase obr wrpr opt sr cr selected examined resets
+    global mem image reads torn bad phase obr wrpr selected examined resets
     if {$selected eq "stm32f1x.cpu" && !$examined} {error "Target not examined yet"}
-    if {$address >= 0x08000000 && $address < 0x08010000} {return $image([expr {$address}])}
+    if {$address >= 0x08000000 && $address < 0x08010000} {
+        puts "IMAGE_READ $address $count"
+        if {$count>64} {error "oversized image read"}
+        set out {}
+        for {set n 0} {$n<$count} {incr n} {lappend out [lindex $image([expr {$address+$n}]) 0]}
+        return $out
+    }
     if {$address == 0xe0042004} {return 0}
     if {$address == 0xe0042000} {
         puts IDCODE_READ
@@ -168,50 +200,18 @@ proc read_memory {address width count} {
         return $obr
     }
     if {$address == 0x40022020} {if {$bad eq "wrpr-read"} {error "WRPR read failed"}; return $wrpr}
-    if {$address == 0x40021000} {return 3}
-    if {$address == 0x4002200c} {if {$bad eq "busy"} {return 1}; return $sr}
-    if {$address == 0x40022010} {return $cr}
-    if {$address >= 0x1ffff800 && $address < 0x1ffff810} {
-        set out {}
-        for {set n 0} {$n < $count} {incr n} {lappend out $opt([expr {($address-0x1ffff800)/2+$n}])}
-        return $out
-    }
+    if {$address >= 0x1ffff800 && $address < 0x1ffff810} {error "raw option read forbidden"}
     if {$address == 0x20000010 && $torn} {incr reads; return [expr {$reads % 2 ? 2 : 4}]}
     set out {}
     for {set n 0} {$n < $count} {incr n} {lappend out $mem([expr {($address-0x20000000)/4+$n}])}
     return $out
 }
 proc write_memory {address width words} {
-    global mem cr sr opt bad selected examined
+    global mem selected examined
     if {$selected eq "stm32f1x.cpu" && !$examined} {error "Target not examined yet"}
     if {$address == 0xe0042004} {puts IMPLICIT_TARGET_WRITE; return}
-    if {$address >= 0x40000000 && $address < 0x50000000} {
-        puts [format "MMIO_WRITE %x" $address]
-        set value [lindex $words 0]
-        if {$address == 0x40022008 && $value == 0xcdef89ab} {set cr 0x200}
-        if {$address == 0x4002200c} {set sr [expr {$sr & ~$value}]}
-        if {$address == 0x40022010} {
-            set cr $value
-            if {$value == 0x260} {
-                puts OPTION_ERASE
-                if {$bad eq "erase-fail"} {set sr 0x10} else {
-                    for {set n 0} {$n < 8} {incr n} {set opt($n) 0xffff}
-                    set sr 0x20
-                }
-            }
-        }
-        return
-    }
-    if {$address >= 0x1ffff800 && $address < 0x1ffff810} {
-        if {$cr != 0x210 || $width != 16} {error "invalid option programming state/width"}
-        set value [lindex $words 0]
-        puts [format "OPTION_PROGRAM %x %x" $address $value]
-        if {$bad eq "write-fail"} {set sr 0x4; return}
-        if {$bad eq "write-transport"} {error "option bus failure"}
-        set opt([expr {($address-0x1ffff800)/2}]) [expr {$value | ((~$value & 255) << 8)}]
-        set sr 0x20
-        return
-    }
+    if {$address >= 0x40000000 && $address < 0x50000000} {error "unexpected direct MMIO write"}
+    if {$address >= 0x1ffff800 && $address < 0x1ffff810} {error "unexpected direct option write"}
     puts MAILBOX_WRITE
     set index [expr {($address-0x20000000)/4}]
     if {$index != 8 && $mem(8) != 0} {error "payload without invalidation"}
@@ -234,8 +234,8 @@ proc mww {address value} {write_memory $address 32 [list $value]}
 
 def run_tcl(code, setup='', env=None):
     elf = read_elf(ELF)
-    image = '\n'.join(f'set image({addr}) {{{" ".join(str(b) for b in data)}}}'
-                      for addr,data in elf['loads'])+'\n'
+    image = '\n'.join(f'set image({addr+offset}) {{{byte}}}'
+                      for addr,data in elf['loads'] for offset,byte in enumerate(data))+'\n'
     script = f'set fixtures {{{FIXTURES}}}\n'+TCL_MODEL+image+setup+'\n'+code
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp)/'test.tcl'; path.write_text(script)
@@ -254,7 +254,8 @@ class Plans(unittest.TestCase):
 
     def mailbox(self,action,value=None,setup='',profile='native-swd'):
         return run_tcl(plan(read_elf(ELF),'EXAMPLE_ONLY',action,value,
-                           idcode=IDENTITY['idcode'],uid=IDENTITY['uid'],profile=profile),setup)
+                           idcode=IDENTITY['idcode'],uid=IDENTITY['uid'],profile=profile,
+                           debug_select=action=='select'),setup)
 
     def test_dependency_model_reproduces_original_hook(self):
         # Verify that the included real script WOULD write target state if not disabled.
@@ -291,11 +292,35 @@ class Plans(unittest.TestCase):
     def test_refuses_schema_pending_fault_and_torn_reads(self):
         for setup in ('set mem(0) 0','set mem(1) 2','set mem(2) 124','set mem(3) 2',
                       'set mem(8) 4','set torn 1','set mem(16) 0xfffffffe; set mem(8) 0xfffffffe',
-                      'set image(134217728) {0}'):
+                      'set image(134217728) {255}'):
             r=self.mailbox('set','0',setup)
             self.assertNotEqual(r.returncode,0)
             self.assertNotIn('FINISHED',r.stdout)
             self.assertNotIn('IMPLICIT_',r.stdout)
+
+    def test_bounded_image_reads_cover_every_byte_and_reject_mismatch(self):
+        r=self.mailbox('status')
+        self.assertEqual(r.returncode,0,r.stderr)
+        reads=[tuple(int(x,0) for x in line.split()[1:]) for line in r.stdout.splitlines()
+               if line.startswith('IMAGE_READ ')]
+        expected=[(address+offset,min(64,len(blob)-offset))
+                  for address,blob in read_elf(ELF)['loads'] for offset in range(0,len(blob),64)]
+        self.assertEqual(reads,expected)
+        address,blob=read_elf(ELF)['loads'][0]
+        for length in (1,63,64,65):
+            short=run_tcl(image_guard({'loads':[(address,blob[:length])]}))
+            self.assertEqual(short.returncode,0,short.stderr)
+            self.assertEqual(sum(int(line.split()[-1]) for line in short.stdout.splitlines()
+                                 if line.startswith('IMAGE_READ ')),length)
+        for offset in (0,63,64,len(blob)-1):
+            r=self.mailbox('set','0',f'set image({address+offset}) {{{blob[offset]^255}}}')
+            self.assertNotEqual(r.returncode,0)
+            self.assertNotIn('MAILBOX_WRITE',r.stdout)
+
+    def test_mapping_selection_requires_explicit_debug_opt_in(self):
+        with self.assertRaisesRegex(ValueError,'debug-only'):
+            plan(read_elf(ELF),'EXAMPLE_ONLY','select','0',
+                 idcode=IDENTITY['idcode'],uid=IDENTITY['uid'])
 
     def install(self,phase,bad='none',confirm=True):
         i=PROTECTED if phase in ('remove-rdp','post-rdp-status') else IDENTITY
@@ -316,10 +341,8 @@ class Plans(unittest.TestCase):
                 self.assertNotIn('UID_READ',r.stdout)
                 self.assertNotIn('DENSITY_READ',r.stdout)
                 self.assertEqual(r.stdout.count('OPTION_ERASE\n'),1)
-                self.assertIn('RDP_PROGRAMMED_POR_REQUIRED',r.stdout)
-                programs=[x for x in r.stdout.splitlines() if x.startswith('OPTION_PROGRAM')]
-                self.assertEqual(len(programs),8)
-                self.assertEqual(programs[-1],'OPTION_PROGRAM 1ffff800 a5')
+                self.assertIn('UNLOCK_DRIVER_RETURNED_POR_REQUIRED',r.stdout)
+                self.assertEqual(r.stdout.count('DRIVER_UNLOCK\n'),1)
                 self.assertNotIn('FLASH ',r.stdout)
             elif phase=='post-rdp-status':
                 self.assertIn('POST_POR_UID=0123456789abcdef13579bdf',r.stdout)
@@ -354,7 +377,7 @@ class Plans(unittest.TestCase):
                  confirmation({'identity':i,'bin_sha256':'1'*64},phase)}
             setup=f'set phase {phase}\nset obr {i["obr"]}'
             # Execute the former lifecycle against a reset that invalidates
-            # examination. It must fail before FPEC/image operations.
+            # examination. It must fail before driver/image operations.
             old=code.replace('stm32f1x.cpu arp_examine\nhalt 1000\n','',1)
             r=run_tcl(old,setup,env)
             self.assertNotEqual(r.returncode,0)
@@ -374,11 +397,11 @@ class Plans(unittest.TestCase):
                                   'PE43703_PHASE_COMPLETE'):
                     self.assertNotIn(forbidden,r.stdout)
 
-    def test_fpec_partial_failure_never_claims_success_or_retries(self):
-        for bad in ('busy','erase-fail','write-fail','write-transport'):
+    def test_driver_partial_failure_never_claims_success_or_retries(self):
+        for bad in ('busy','erase-fail','write-fail','write-transport','driver-option-read','missing-marker','probe-return','probe-other'):
             r=self.install('remove-rdp',bad)
             self.assertNotEqual(r.returncode,0,(bad,r.stderr))
-            self.assertNotIn('RDP_PROGRAMMED_POR_REQUIRED',r.stdout)
+            self.assertNotIn('UNLOCK_DRIVER_RETURNED_POR_REQUIRED',r.stdout)
             self.assertNotIn('PE43703_PHASE_COMPLETE',r.stdout)
             self.assertLessEqual(r.stdout.count('OPTION_ERASE\n'),1)
 
@@ -389,7 +412,7 @@ class Plans(unittest.TestCase):
 
 
 class Installation(unittest.TestCase):
-    def test_execute_runs_real_included_config_and_checked_fpec(self):
+    def test_execute_runs_real_included_config_and_standard_driver(self):
         for bad in ('none','erase-fail','write-fail','option-read','wrpr-read'):
             with self.subTest(bad=bad),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp)/'stage';m=stage(ELF,root,PROTECTED)
@@ -402,7 +425,7 @@ class Installation(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         execute(root,'remove-rdp',confirmation(m,'remove-rdp'),runner)
                 r=json.loads((root/'attempt-remove-rdp/receipt.json').read_text())
-                self.assertEqual(r['completion'],'option-programmed-POR-required' if bad=='none' else 'unknown')
+                self.assertEqual(r['completion'],'driver-returned-POR-required' if bad=='none' else 'unknown')
 
     def test_identity_validation_and_stage_separation(self):
         for key,value in (('serial','bad;exec'),('device','STM32F4'),('idcode','0x20036411'),
@@ -426,7 +449,7 @@ class Installation(unittest.TestCase):
                 root=Path(tmp)/'stage';m=stage(ELF,root,identity)
                 for phase in m['plans']:
                     runner=Mock(return_value=subprocess.CompletedProcess([],0,
-                        f'RDP_PROGRAMMED_POR_REQUIRED\nPE43703_PHASE_COMPLETE {phase}\n',''))
+                        f'PE43703_PROBE_BEGIN\nPE43703_PROBE_END\nSTANDARD_UNLOCK_BEGIN\nUNLOCK_DRIVER_RETURNED_POR_REQUIRED\nPE43703_PHASE_COMPLETE {phase}\n',''))
                     with self.assertRaises(ValueError): execute(root,phase,'yes',runner)
                     runner.assert_not_called()
                     execute(root,phase,confirmation(m,phase),runner)
@@ -469,19 +492,28 @@ class Installation(unittest.TestCase):
                 runner.assert_not_called()
                 self.assertFalse((root/'attempt-remove-rdp').exists())
 
-    def test_option_snapshot_preserves_all_bytes(self):
+    def test_driver_option_snapshot_preservation(self):
         i=dict(PROTECTED,obr='0x012345fe',wrpr='0x76543210')
-        self.assertEqual(option_values(i),[0x7f,0xd1,0x48,0x10,0x32,0x54,0x76,0xa5])
         if shutil.which('tclsh'):
             token=confirmation({'identity':i,'bin_sha256':'1'*64},'remove-rdp')
             r=run_tcl(tcl_plan(i,'remove-rdp',ELF.with_suffix('.bin'),'1'*64),
                       'set phase remove-rdp\nset obr 0x012345fe\nset wrpr 0x76543210',
                       {'PATH':os.environ.get('PATH',''),'PE43703_INSTALL_CONFIRMED':token})
             self.assertEqual(r.returncode,0,r.stderr)
-            actual=[line for line in r.stdout.splitlines() if line.startswith('OPTION_PROGRAM')]
-            self.assertEqual(actual,['OPTION_PROGRAM 1ffff802 7f','OPTION_PROGRAM 1ffff804 d1',
-                'OPTION_PROGRAM 1ffff806 48','OPTION_PROGRAM 1ffff808 10','OPTION_PROGRAM 1ffff80a 32',
-                'OPTION_PROGRAM 1ffff80c 54','OPTION_PROGRAM 1ffff80e 76','OPTION_PROGRAM 1ffff800 a5'])
+            self.assertIn('RESTORED_OPTIONS 165 127 209 72 16 50 84 118',r.stdout)
+
+    def test_density_diagnostic_only_allowed_inside_probe(self):
+        begin='PE43703_PROBE_BEGIN\n'
+        end='\nPE43703_PROBE_END\nSTANDARD_UNLOCK_BEGIN\nUNLOCK_DRIVER_RETURNED_POR_REQUIRED\n'
+        expected='Error: Failed to read memory at 0x1ffff7e0\nWarn : STM32 flash size failed, probe inaccurate - assuming 128k flash'
+        self.assertTrue(checked_transcript(begin+expected+end,'remove-rdp'))
+        for raw in (expected+begin+end,begin+end+expected,
+                    begin+expected+'\nError: other read failed'+end,
+                    begin+expected+end+'stm32x failed to erase options',
+                    begin+'Error: other failed; '+expected+end,
+                    begin+expected,begin+expected+end+begin,end+begin+expected):
+            self.assertFalse(checked_transcript(raw,'remove-rdp'),raw)
+        self.assertFalse(checked_transcript(begin+expected+end,'flash'))
 
     def test_no_serial_injection(self):
         with self.assertRaises(ValueError):

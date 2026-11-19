@@ -1,6 +1,6 @@
 # Installation on a stock STM32F103C8T6 + PE43703 board
 
-This is a staged procedure for future attended hardware qualification. The replacement has only been built and tested offline. Do not treat the existence of these commands as evidence that the board has been flashed, that the pin mapping is correct, or that the RF path works.
+One unit has completed standard-driver RDP removal, actual power cycling, post-POR identity checks, image flash/verification and a permutation-0 mailbox/RF comparison. USB serial testing remains pending. These results apply to that unit; verify wiring and power on every board before installing.
 
 ## Equipment and disassembly
 
@@ -109,13 +109,15 @@ python3 tools/install.py execute --directory .local/erase-plan --phase remove-rd
 
 Type the full displayed `ERASE-IRREVERSIBLY` confirmation. It binds the unit label, part, adapter serial, DPIDR, full IDCODE, physical identity assertion, OBR/WRPR snapshot and image hash. Tcl checks confirmation before adapter open, then identity/options before intentional core examination and `reset halt`; it repeats the checks afterward.
 
-The plan uses the [PM0075 §2.3.5/2.4.1 FPEC sequence](https://www.st.com/resource/en/programming_manual/cd00283419-stm32f10xxx-flash-memory-microcontrollers-stmicroelectronics.pdf) directly. It enables HSI, unlocks FPEC/options, erases the option block, restores every non-RDP byte from the checked OBR/WRPR snapshot, and programs RDP `0xa5` last. That final transition triggers hardware mass erase. It checks bounded busy/status polls and verifies each programmed byte/complement, then locks FPEC and stops with `RDP_PROGRAMMED_POR_REQUIRED`. It does not invoke `stm32f1x unlock 0`: that OpenOCD handler has unchecked option-read and false-success failure paths. No guessed flash capacity, loader, retry, automatic power-cycle or automatic flash is used. A partial failure can leave partial options or erased firmware; retain evidence and stop.
+The plan uses OpenOCD's standard `stm32f1x unlock 0`, after the guarded reset/halt sequence. It explicitly re-examines and halts the deferred core after reset. The driver performs option erase/programming and destructive unprotection. A configured 64 KiB bank overrides its family-size estimate: the driver's probe may log a blocked read at `0x1ffff7e0` and a 128 KiB fallback under active RDP. Only those known diagnostics inside the marked probe are allowed, and the configured 64 KiB result must be confirmed. Unexpected probe diagnostics stop before unlock.
+
+The unlock handler can report errors while returning exit zero. Its captured erase/program diagnostics are fatal, and a missing `stm32x unlocked.` marker also stops the phase. Raw option flash at `0x1ffff800` is **not read before POR**: the former direct sequence failed there after option erase while RDP remained active. The plan logs pre-POR OBR, emits `UNLOCK_DRIVER_RETURNED_POR_REQUIRED` and stops. This marker means the driver returned successfully; authoritative RDP-clear verification is still required after real POR. Driver programming can use an SRAM loader. No automatic power-cycle, flash, retry or stock restoration follows. A partial failure can leave partial options or erased firmware; retain evidence and stop.
 
 Every execute phase records one consumed attempt under `attempt-<phase>/` before adapter open. It retains stdout/stderr and a completion receipt. Exit zero alone is insufficient: error diagnostics or missing phase-success evidence leave completion unknown. An existing attempt directory prevents replay, including after a timeout. Do not delete it to retry an ambiguous destructive operation.
 
 ## Perform actual POR, check options, then record the UID
 
-After successful option programming, perform the separately arranged power-on reset. Reconfirm the sole physical target, exact adapter and stable power. Do not use repeated unlock or reset commands as substitutes.
+After the driver-returned/POR-required result, perform the separately arranged power-on reset. Reconfirm the sole physical target, exact adapter and stable power. Do not use repeated unlock or reset commands as substitutes.
 
 Then run this **read-only device phase**, confirming `POR-COMPLETED-CHECK` only after actual POR:
 
@@ -123,7 +125,7 @@ Then run this **read-only device phase**, confirming `POR-COMPLETED-CHECK` only 
 python3 tools/install.py execute --directory .local/erase-plan --phase post-rdp-status
 ```
 
-It checks DPIDR/IDCODE, inactive RDP/OPTERR=0, preserved OBR/WRPR and every raw option byte/complement. It requires actual reported flash density 64 KiB and prints `POST_POR_UID=` followed by three 32-bit UID words. Record that exact string as `MCU_UID_WORDS`, in **register-read order**, without byte swapping. UID starts at `0x1ffff7e8`. Empty, unreadable, all-zero or all-one UID is rejected; never substitute the adapter serial. Record post-POR OBR (the original value with RDPRT cleared) as `UNPROTECTED_OBR`.
+It checks DPIDR/IDCODE, inactive RDP/OPTERR=0 and preserved loaded OBR/WRPR. It prints `POST_POR_OBR=`; no raw option-flash read is used. It requires actual reported flash density 64 KiB and prints `POST_POR_UID=` followed by three 32-bit UID words. Record that exact string as `MCU_UID_WORDS`, in **register-read order**, without byte swapping. UID starts at `0x1ffff7e8`. Empty, unreadable, all-zero or all-one UID is rejected; never substitute the adapter serial. Record post-POR OBR (the original value with RDPRT cleared) as `UNPROTECTED_OBR`.
 
 Stage a separate programming manifest **offline** with this actual UID:
 

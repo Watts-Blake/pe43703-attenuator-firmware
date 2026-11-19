@@ -2,7 +2,9 @@
 
 **Display changes but attenuation doesn't? USB/serial commands have no effect, the PC software doesn't work, or the `wv` command gets no reply?** This project develops replacement firmware for a LiebeWH-style OLED digital programmable attenuator: the aluminium, SMA-to-SMA, STM32F103C8T6 + PE43703 board listed as a USB-programmable 0–31.75 dB, 0.25 dB-step, 6 GHz digital RF attenuator.
 
-**Status: offline implementation only. Firmware operation, wiring assignments and RF behavior are UNQUALIFIED on hardware.** No prebuilt release is offered yet. A BIN/HEX/checksum release is planned only after an actual unit has been flashed and verified. The advertised frequency range is a product description, not a measured performance claim.
+**Status: one unit has been flashed, image-verified and tested through the SWD mailbox.** Default mapping 0 produced a reversible RF response in the single-unit comparison below. CH340 USB serial testing is still pending; no prebuilt release is offered until that test passes. The advertised frequency range is a product description, not a measured performance claim.
+
+In that comparison, a phone reported about −85 dBm RSRP before a 20.00 dB command, then −103 dBm about 5 and 15 seconds afterward. After the zero command it returned to −85 dBm at both follow-up samples. This roughly 18 dB reported change supports control with SI=PB11, CLK=PB12, LE=PB13. Phone RSRP and the test enclosure do not establish calibrated attenuation accuracy, insertion loss or performance across the advertised frequency range.
 
 ## Board and original-firmware symptoms
 
@@ -24,12 +26,12 @@ The text format comes from static inspection of the bundled tool in [att6000_con
 - Boot requests and latches the **0.00 dB command** before accepting commands. This does not establish physical 0 dB or remove the PE43703's inherent insertion loss.
 - USART1 on PA9/PA10, 115200 8N1: `set <dB>` replies `ok <dB>` after the complete serial transaction; `get` returns the last command issued. Neither is RF readback.
 - PE43703 address zero, full 16-bit frame, quarter-dB steps, LSB first, rising CLK sampling and an LE pulse. No display or button driver in v1; use the display detached for initial qualification. PA4–PA7 stay at reset input levels.
-- All six SI/CLK/LE permutations across PB11/PB12/PB13 can be selected using the SWD RAM mailbox. The default is an explicit **hypothesis**, SI=PB11, CLK=PB12, LE=PB13. Read mailbox status to confirm the mapping selected.
+- Normal operation uses mapping 0: SI=PB11, CLK=PB12, LE=PB13. Boot always selects it; the production UART interface cannot change it. Alternative mappings remain available only through the SWD debug mailbox with explicit `--debug-select`. Read status before testing; GPIO-to-chip continuity remains untraced.
 - Assumed 8 MHz HSE crystal → 72 MHz CPU/APB2, 36 MHz APB1. HSE is a design assumption, not a measured oscillator frequency. Clock startup fails closed with a readable mailbox fault; no attenuation command is accepted in that state.
 
 | Pins | v1 use | Qualification |
 | --- | --- | --- |
-| PB11/PB12/PB13 | SI/CLK/LE in selectable order | Output-configuration candidates; connections not traced to the RF chip |
+| PB11/PB12/PB13 | SI/CLK/LE in selectable order | Mapping 0 functionally tested on one unit; connections not continuity-traced |
 | PA4–PA7 | Idle floating inputs | Possible display role is a hypothesis; protocol unknown |
 | PA9 / PA10 | USART1 TX / RX | Intended replacement interface; board UART traces unverified |
 | PA13 / PA14 | SWDIO / SWCLK | Preserve SWD; no debug-port remap |

@@ -71,76 +71,60 @@ if {{[lindex [read_memory 0x40022020 32 1] 0] != {i['wrpr']}}} {{ error "WRPR ch
 '''
 
 
-# PM0075 sections2.3.5/2.4.1: checked FPEC operations. The OpenOCD unlock handler
-# ignores option-read failure and returns success for some option-write failures.
-# Do not call that handler, flash-bank probing, a loader or a density fallback.
-FPEC = '''proc one {address} { return [lindex [read_memory $address 32 1] 0] }
-proc fpec_wait {require_eop} {
-    for {set n 0} {$n < 1000} {incr n} {
-        set sr [one 0x4002200c]
-        if {$sr & 0x14} { error "FPEC program/write-protection error; completion uncertain" }
-        if {!($sr & 1)} {
-            if {$require_eop && !($sr & 0x20)} { error "missing FPEC end-of-operation" }
-            return
-        }
-        sleep 1
+# The standard driver can return success after an option operation fails.
+# Capture its diagnostics and defer authoritative RDP verification until POR.
+PROBE_BEGIN = 'PE43703_PROBE_BEGIN'
+PROBE_END = 'PE43703_PROBE_END'
+EXPECTED_PROBE_LINES = (
+    r'^(?:Error:[ \t]*)?Failed to read memory at 0x1ffff7e0[ \t\r]*$',
+    r'^(?:Warn[ \t]*:[ \t]*)?STM32 flash size failed, probe inaccurate - assuming 128k flash[ \t\r]*$',
+)
+STANDARD_UNLOCK = r"""proc checked_driver {command} {
+    set result [catch {capture $command} output]
+    echo $output
+    if {$result || [regexp -nocase {error|failed|failure|assuming|inaccurate} $output]} {
+        error "driver diagnostic rejected; stop without replay"
     }
-    error "FPEC busy timeout; completion uncertain; never replay"
+    return $output
 }
-fpec_wait 0
-# HSI is required for flash programming/erase; enable after unit validation/halt.
-write_memory 0x40021000 32 [list [expr {[one 0x40021000] | 1}]]
-set ready 0
-for {set n 0} {$n < 1000} {incr n} {
-    if {[one 0x40021000] & 2} { set ready 1; break }
-    sleep 1
-}
-if {!$ready} { error "HSI not ready; no option erase" }
-write_memory 0x40022004 32 {0x45670123}
-write_memory 0x40022004 32 {0xcdef89ab}
-write_memory 0x40022008 32 {0x45670123}
-write_memory 0x40022008 32 {0xcdef89ab}
-if {([one 0x40022010] & 0x280) != 0x200} { error "FPEC/option unlock failed" }
-write_memory 0x4002200c 32 {0x20}
-echo "OPTION_ERASE_BEGIN"
-write_memory 0x40022010 32 {0x220}
-write_memory 0x40022010 32 {0x260}
-fpec_wait 1
-set erased [read_memory 0x1ffff800 16 8]
-if {[llength $erased] != 8} { error "short erased-option read" }
-foreach word $erased { if {$word != 0xffff} { error "option erase incomplete" } }
-write_memory 0x40022010 32 {0x210}
-# Restore every non-RDP byte from the checked OBR/WRPR snapshot. RDP LAST:
-# its transition to0xa5 triggers hardware mass erase of the main flash.
-foreach address $option_addresses byte $option_values {
-    write_memory 0x4002200c 32 {0x20}
-    write_memory $address 16 [list $byte]
-    fpec_wait 1
-    set actual [lindex [read_memory $address 16 1] 0]
-    if {$actual != ($byte | ((~$byte & 255) << 8))} { error "option programming verify failed" }
-}
-write_memory 0x40022010 32 {0x80}
-if {!([one 0x40022010] & 0x80)} { error "FPEC lock failed" }
-echo "RDP_PROGRAMMED_POR_REQUIRED"
-'''
+echo "PE43703_PROBE_BEGIN"
+set probe_rc [catch {capture {flash probe 0}} probe_output]
+echo $probe_output
+echo "PE43703_PROBE_END"
+if {$probe_rc} {error "driver probe failed"}
+set remaining $probe_output
+regsub -all -nocase -line {^(Error:[ \t]*)?Failed to read memory at 0x1ffff7e0[ \t\r]*$} $remaining {} remaining
+regsub -all -nocase -line {^(Warn[ \t]*:[ \t]*)?STM32 flash size failed, probe inaccurate - assuming 128k flash[ \t\r]*$} $remaining {} remaining
+if {[regexp -nocase {error|failed|failure} $remaining]} {error "unexpected probe diagnostic"}
+if {![string match {*flash size = 64 KiB*} $probe_output]} {error "configured64KiB bank not confirmed"}
+echo "STANDARD_UNLOCK_BEGIN"
+set output [checked_driver {stm32f1x unlock 0}]
+if {![string match {*stm32x unlocked.*} $output]} {error "missing standard unlock marker"}
+reset halt
+stm32f1x.cpu arp_examine
+halt 1000
+echo [format "PRE_POR_OBR=0x%08x" [lindex [read_memory 0x4002201c 32 1] 0]]
+echo "UNLOCK_DRIVER_RETURNED_POR_REQUIRED"
+"""
 
 
-def option_values(i):
-    obr, wrpr = int(i['obr'], 0), int(i['wrpr'], 0)
-    return [(obr >> 2) & 255, (obr >> 10) & 255, (obr >> 18) & 255,
-            *[(wrpr >> shift) & 255 for shift in (0, 8, 16, 24)], 0xa5]
-
-
-def verify_options(i):
-    values = option_values(i)
-    expected = [values[-1], *values[:-1]]
-    encoded = ' '.join(hex(b | ((~b & 255) << 8)) for b in expected)
-    return f'''set options [read_memory 0x1ffff800 16 8]
-if {{[llength $options] != 8}} {{ error "short option read" }}
-foreach actual $options expected {{{encoded}}} {{
-    if {{$actual != $expected}} {{ error "post-POR option preservation mismatch" }}
-}}
-'''
+def checked_transcript(raw, phase):
+    if phase == 'remove-rdp':
+        # Only the explicitly delimited probe can have this known RDP read
+        # failure. The same error in unlock or any other phase stays fatal.
+        if raw.count(PROBE_BEGIN) != 1 or raw.count(PROBE_END) != 1:
+            return False
+        if raw.index(PROBE_END) < raw.index(PROBE_BEGIN):
+            return False
+        before, tail = raw.split(PROBE_BEGIN)
+        probe, after = tail.split(PROBE_END)
+        if ('STANDARD_UNLOCK_BEGIN' not in after or
+                'UNLOCK_DRIVER_RETURNED_POR_REQUIRED' not in after):
+            return False
+        for pattern in EXPECTED_PROBE_LINES:
+            probe = re.sub(pattern, '', probe, flags=re.I | re.M)
+        raw = before + probe + after
+    return not re.search(r'(?im)(?:error\s*:|\bfailed\b|\bfailure\b)', raw)
 
 
 def tcl_plan(i, phase, bin_path, bin_hash):
@@ -154,11 +138,12 @@ def tcl_plan(i, phase, bin_path, bin_hash):
     code = f'''if {{![info exists ::env(PE43703_INSTALL_CONFIRMED)] || $::env(PE43703_INSTALL_CONFIRMED) ne {{{token}}}}} {{
     error "Missing exact deliberate phase confirmation; no adapter opened"
 }}
-''' + connection(i['serial'], i['profile']) + chip_guard(i['idcode'], i['dpidr'])
+''' + ('set FLASH_SIZE 0x10000\n' if phase == 'remove-rdp' else '') + connection(i['serial'], i['profile']) + chip_guard(i['idcode'], i['dpidr'])
     if i['kind'] == 'protected-physical':
         code += option_guard(i, after_por=phase == 'post-rdp-status')
         if phase == 'remove-rdp':
-            # No protected UID/density read and no flash-driver bank probe.
+            # No preerase UID requirement. Driver probe may encounter blocked
+            # density; FLASH_SIZE explicitly fixes the bank geometry to64KiB.
             code += '''targets stm32f1x.cpu
 stm32f1x.cpu arp_examine
 reset halt
@@ -167,12 +152,10 @@ reset halt
 stm32f1x.cpu arp_examine
 halt 1000
 ''' + chip_guard(i['idcode'], i['dpidr']) + option_guard(i)
-            addresses = ' '.join(hex(a) for a in (*range(0x1ffff802, 0x1ffff810, 2), 0x1ffff800))
-            code += f'set option_addresses {{{addresses}}}\n'
-            code += 'set option_values {' + ' '.join(str(v) for v in option_values(i)) + '}\n' + FPEC
-            code += 'echo "STOP: actual power-on reset required; never replay removal."\n'
+            code += STANDARD_UNLOCK
         else:
-            code += verify_options(i) + '''set uid [read_memory 0x1ffff7e8 32 3]
+            code += '''echo [format "POST_POR_OBR=0x%08x" [lindex [read_memory 0x4002201c 32 1] 0]]
+set uid [read_memory 0x1ffff7e8 32 3]
 if {[llength $uid] != 3} { error "short post-POR UID read" }
 if {([lindex $uid 0] == 0 && [lindex $uid 1] == 0 && [lindex $uid 2] == 0) ||
     ([lindex $uid 0] == 0xffffffff && [lindex $uid 1] == 0xffffffff && [lindex $uid 2] == 0xffffffff)} {
@@ -252,11 +235,11 @@ def execute(directory, phase, confirm, runner=subprocess.run):
         (attempt/'stdout.log').write_text(stdout)
         (attempt/'stderr.log').write_text(stderr)
         raw = stdout+'\n'+stderr
-        if (result.returncode != 0 or re.search(r'(?im)(?:error\s*:|\bfailed\b|\bfailure\b)', raw) or
+        if (result.returncode != 0 or not checked_transcript(raw, phase) or
             f'PE43703_PHASE_COMPLETE {phase}' not in raw or
-            (phase == 'remove-rdp' and 'RDP_PROGRAMMED_POR_REQUIRED' not in raw)):
+            (phase == 'remove-rdp' and 'UNLOCK_DRIVER_RETURNED_POR_REQUIRED' not in raw)):
             raise ValueError('device operation failed/ambiguous; inspect retained transcript; do not replay')
-        receipt['completion'] = 'option-programmed-POR-required' if phase == 'remove-rdp' else 'completed'
+        receipt['completion'] = 'driver-returned-POR-required' if phase == 'remove-rdp' else 'completed'
         return result
     except subprocess.TimeoutExpired as error:
         for name, value in (('stdout', error.stdout), ('stderr', error.stderr)):
