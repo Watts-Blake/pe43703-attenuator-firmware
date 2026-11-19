@@ -1,6 +1,16 @@
 # Validation record
 
-## Current loader/app — single-unit qualification
+## v0.1.1 development ADC app — offline validation only
+
+The v0.1.1 development app adds explicit PA1 sampling and an app-version reply (`adc`, alias `diag adc`, plus `version`). It has not yet been installed or qualified on hardware. `make all test inspect` passes with Arm GCC 16.2.0; the ADC host test also passes AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled. The three C executables and 29 Python methods run offline, without physical device access.
+
+The app image is 2,960 bytes (236 vectors + 2,724 text), with a 128-byte mailbox and no data/BSS. Thumb entry is `0x08002141`, initial SP `0x20004ff8`, and all 59 vector entries pass inspection. App BIN SHA256 is `9b3b33d11cd4cdce875fcf67d5dcc45ad4922c6b0628a681e9b8186d22f2d356`; ELF SHA256 is `6b2e94ad531d002235316e4a82dac267971f8b25bb6f94c707fa20bce508eec4`. The loader BIN/ELF remain byte-identical to v0.1.0 below. There is no new release asset or hardware qualification implied by this build.
+
+The new executable model runs the production ADC register sequence: all 4096 sample values, delayed self-clearing calibration flags, calibration-data discard, single-conversion EOC, PA1-only mode changes and cleanup. Injected reset-calibration/calibration/EOC timeouts and clock/ownership faults return bounded errors; the UART accepts a subsequent SET. Normal/malformed/overflow/receive-error traffic never accesses ADC. Successful sampling leaves requested attenuation, permutation and issued count unchanged. See [diagnostic limits](diagnostics.md).
+
+Compiled-image inspection confirms 32-bit MMIO callbacks, 100-poll ADC waits, ADON/calibration/start ordering, 12-bit result masking and common power/reset/clock/GPIO cleanup. The diagnostic is reached only from a valid parser request; boot zero still precedes UART enable. There are no undefined symbols or runtime/heap calls. Compiler stack reports 144 bytes for app reset, 48 for the console and ADC sample helpers, 24 for the ADC wait helper, and 56 for the parser: the deepest static path remains below 384 bytes, versus the linker’s 2 KiB reservation. This is a static estimate, not a measured high-water mark.
+
+## v0.1.0 loader/app — single-unit qualification
 
 Built with `arm-none-eabi-gcc (GCC) 16.2.0`, Cortex-M3 Thumb, freestanding C11, `-Os`, warnings as errors, no runtime library. `make all test inspect` passes. Initial SP for both images is `0x20004ff8`; both linkers exclude the top eight RAM bytes and reserve at least 2 KiB stack. All 59 vectors in each actual ELF/BIN pair are checked, with zero reserved core entries. No undefined symbols or heap/runtime calls.
 

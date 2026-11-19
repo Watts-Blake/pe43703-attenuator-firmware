@@ -1,4 +1,5 @@
 #include "core.h"
+#include "version.h"
 const uint8_t permutations[6][3] = {
     {11,12,13}, {11,13,12}, {12,11,13},
     {12,13,11}, {13,11,12}, {13,12,11}
@@ -128,6 +129,7 @@ static size_t response(char out[16], const char *prefix, uint32_t qdb) {
     out[n++] = '\r'; out[n++] = '\n'; out[n] = 0; return n;
 }
 size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]) {
+    line->adc = false; /* one request, consumed synchronously by the console */
     if (rx_error) line->discard = true;
     if (ch == '\r' || ch == '\n') {
         if (!line->used && !line->discard) return 0;
@@ -139,6 +141,15 @@ size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]
                 const char reply[] = "ok bootloader\r\n";
                 for (size_t i=0; i<sizeof(reply); ++i) out[i]=reply[i];
                 n=sizeof(reply)-1; valid=true;
+            }
+            else if (equal(line->data, "adc") || equal(line->data, "diag adc")) {
+                line->adc = true; valid = true;
+            }
+            else if (equal(line->data, "version")) {
+                const char reply[] = "version " APP_VERSION "\r\n";
+                _Static_assert(sizeof(reply) <= 16, "version reply fits UART buffer");
+                for (size_t i = 0; i < sizeof(reply); ++i) out[i] = reply[i];
+                n = sizeof(reply)-1; valid = true;
             }
             else if (equal(line->data, "get")) { n = response(out, "", c->qdb); valid = true; }
             else if (line->used > 4 && line->data[0] == 's' && line->data[1] == 'e' &&
