@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from image import read_elf
+from pack_image import bundle
 from swd import PROFILES, connection, chip_guard, mcu_guard, identifier, hexword, validate_mcu
 
 PHASES = ('remove-rdp', 'post-rdp-status', 'flash', 'verify', 'start')
@@ -182,18 +183,24 @@ halt 1000
     return code + f'echo "PE43703_PHASE_COMPLETE {phase}"\nshutdown\n'
 
 
-def stage(elf_path, directory, identity):
+def stage(elf_path, directory, identity, loader_path=None):
     validate_identity(identity)
     elf = read_elf(elf_path)
     binary = Path(elf_path).with_suffix('.bin').read_bytes()
     if binary != elf['binary']:
         raise ValueError('BIN differs from selected ELF')
+    loader_path = Path(loader_path) if loader_path else Path(elf_path).with_name('bootloader.elf')
+    loader = read_elf(loader_path, loader=True)
+    if loader_path.with_suffix('.bin').read_bytes() != loader['binary']:
+        raise ValueError('loader BIN differs from selected ELF')
+    binary = bundle(loader['binary'], binary)
     directory = Path(directory).resolve()
     plans = {p: tcl_plan(identity, p, directory/'candidate.bin', digest(binary)) for p in phases(identity)}
     directory.mkdir(parents=True, exist_ok=False)
     (directory/'candidate.bin').write_bytes(binary)
     (directory/'candidate.elf').write_bytes(Path(elf_path).read_bytes())
-    manifest = {'schema': 2, 'identity': identity, 'bin_sha256': digest(binary),
+    (directory/'bootloader.elf').write_bytes(loader_path.read_bytes())
+    manifest = {'schema': 3, 'loader_sha256': loader['sha256'], 'identity': identity, 'bin_sha256': digest(binary),
                 'elf_sha256': elf['sha256'], 'plans': {}}
     for phase, text in plans.items():
         (directory/f'{phase}.tcl').write_text(text)
@@ -207,13 +214,15 @@ def execute(directory, phase, confirm, runner=subprocess.run):
     manifest = json.loads((directory/'manifest.json').read_text())
     i = manifest['identity']
     validate_identity(i)
-    if manifest['schema'] != 2 or phase not in phases(i):
+    if manifest['schema'] != 3 or phase not in phases(i):
         raise ValueError('invalid schema or identity phase')
     elf = read_elf(directory/'candidate.elf')
+    loader = read_elf(directory/'bootloader.elf', loader=True)
     binary = (directory/'candidate.bin').read_bytes()
     expected = tcl_plan(i, phase, directory/'candidate.bin', manifest['bin_sha256'])
     plan = directory/f'{phase}.tcl'
-    if (digest(binary) != manifest['bin_sha256'] or binary != elf['binary'] or
+    if (digest(binary) != manifest['bin_sha256'] or binary != bundle(loader['binary'], elf['binary']) or
+        loader['sha256'] != manifest['loader_sha256'] or
         elf['sha256'] != manifest['elf_sha256'] or plan.read_text() != expected or
         digest(expected.encode()) != manifest['plans'][phase]):
         raise ValueError('staged image/plan changed; refusing execution')
@@ -262,6 +271,7 @@ def main():
     collect.add_argument('--output', type=Path, required=True)
     create = sub.add_parser('stage', help='offline only')
     create.add_argument('--elf', type=Path, required=True)
+    create.add_argument('--loader-elf', type=Path, required=True)
     create.add_argument('--directory', type=Path, required=True)
     create.add_argument('--purpose', choices=('remove-rdp','program'), required=True)
     for key in ('device','unit','serial','dpidr','idcode','obr','wrpr'):
@@ -283,7 +293,7 @@ def main():
             i = {k:getattr(a,k) for k in ('device','unit','serial','dpidr','idcode','obr','wrpr','profile')}
             i['kind'] = 'protected-physical' if a.purpose == 'remove-rdp' else 'uid-bound'
             i['uid'], i['physical_confirmation'] = a.uid, a.physical_confirmation
-            stage(a.elf, a.directory, i)
+            stage(a.elf, a.directory, i, a.loader_elf)
             print('Staged only. No device contacted. Review every plan and identity policy.')
         else:
             manifest = json.loads((a.directory/'manifest.json').read_text())

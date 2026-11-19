@@ -1,4 +1,5 @@
 #include "core.h"
+#include "layout.h"
 #define REG(address) (*(volatile uint32_t *)(address))
 #define RCC_CR REG(0x40021000u)
 #define RCC_CFGR REG(0x40021004u)
@@ -21,7 +22,7 @@ static bool wait_bits(volatile uint32_t *reg, uint32_t mask, uint32_t wanted) {
     return false;
 }
 static bool clock_init(void) {
-    /* Entry contract: hardware reset, HSI selected, no inherited bootloader state. */
+    /* Entry contract: hardware reset or loader handoff: HSI selected, UART reset. */
     RCC_CR |= 1u << 16; /* HSE crystal, design assumption 8 MHz */
     if (!wait_bits(&RCC_CR, 1u << 17, 1u << 17)) return false;
     FLASH_ACR = (1u << 4) | 2u; /* prefetch + two wait states before 72 MHz */
@@ -53,7 +54,8 @@ void Reset_Handler(void) {
     uint32_t *src = &_sidata;
     for (uint32_t *p = &_sdata; p < &_edata; ++p) *p = *src++;
     for (uint32_t *p = &_sbss; p < &_ebss; ++p) *p = 0;
-    SCB_VTOR = 0x08000000u;
+    SCB_VTOR = APP_BASE;
+    __asm__ volatile ("dsb; isb" ::: "memory");
     mailbox_init(&mailbox);
     if (!clock_init()) { mailbox.state = MB_CLOCK_FAULT; park(); }
     SYST_RVR = 0xffffffu; SYST_CVR = 0; SYST_CSR = 5; /* core clock, no IRQ */
@@ -71,7 +73,7 @@ void Reset_Handler(void) {
     USART_CR1 = (1u << 13) | (1u << 3) | (1u << 2); /* 8N1, no IRQ */
     mailbox_publish(&mailbox, &controller);
     __asm__ volatile ("dmb" ::: "memory"); mailbox.state = MB_READY;
-    Line line = { {0}, 0, false };
+    Line line; line.used=0; line.discard=false; line.bootloader=false;
     for (;;) {
         mailbox_poll(&mailbox, &controller);
         uint32_t sr = USART_SR;
@@ -81,8 +83,15 @@ void Reset_Handler(void) {
             size_t n = line_feed(&line, &controller, ch, (sr & 15u) != 0, out);
             mailbox_publish(&mailbox, &controller);
             for (size_t i = 0; i < n; ++i) {
-                if (!wait_bits(&USART_SR, 1u << 7, 1u << 7)) break;
+                if (!wait_bits(&USART_SR, 1u << 7, 1u << 7)) park();
                 USART_DR = (uint32_t)(unsigned char)out[i];
+            }
+            if (line.bootloader) {
+                if (!wait_bits(&USART_SR, 1u << 6, 1u << 6)) park();
+                REG(BOOT_RAM) = BOOT_REQUEST; REG(BOOT_RAM+4u) = ~BOOT_REQUEST;
+                __asm__ volatile ("dsb" ::: "memory");
+                REG(0xe000ed0cu) = 0x05fa0004u;
+                park();
             }
         }
     }

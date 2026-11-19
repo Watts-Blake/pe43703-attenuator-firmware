@@ -141,7 +141,7 @@ static void feed(Line *l, Controller *c, const char *s, const char *expected) {
     assert(n == strlen(expected)); assert(strcmp(out,expected) == 0);
 }
 static void test_uart(void) {
-    Controller c; controller_boot(&c,silent()); Line l = {{0},0,false};
+    Controller c; controller_boot(&c,silent()); Line l = {0};
     feed(&l,&c,"get\r\n","0.00\r\n");
     feed(&l,&c,"set 31.75\n","ok 31.75\r\n");
     feed(&l,&c,"set 0.25\r","ok 0.25\r\n");
@@ -156,6 +156,12 @@ static void test_uart(void) {
     assert(!line_feed(&l,&c,'s',true,out));
     feed(&l,&c,"et 5\n","err\r\n"); assert(c.qdb == 0);
     feed(&l,&c,"set 1\r\nget\r\n","1.00\r\n");
+    assert(!l.bootloader);
+    count=c.issued;
+    feed(&l,&c,"bootloader extra\n","err\r\n");
+    assert(!l.bootloader && c.issued==count);
+    feed(&l,&c,"bootloader\n","ok bootloader\r\n");
+    assert(l.bootloader && c.qdb==0 && c.issued==count+1u);
 }
 int main(void) {
     test_frames(); test_mapping_transitions(); test_parser(); test_mailbox(); test_partial_publication(); test_uart();

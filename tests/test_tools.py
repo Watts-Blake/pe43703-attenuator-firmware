@@ -292,7 +292,7 @@ class Plans(unittest.TestCase):
     def test_refuses_schema_pending_fault_and_torn_reads(self):
         for setup in ('set mem(0) 0','set mem(1) 2','set mem(2) 124','set mem(3) 2',
                       'set mem(8) 4','set torn 1','set mem(16) 0xfffffffe; set mem(8) 0xfffffffe',
-                      'set image(134217728) {255}'):
+                      'set image(134225920) {255}'):
             r=self.mailbox('set','0',setup)
             self.assertNotEqual(r.returncode,0)
             self.assertNotIn('FINISHED',r.stdout)
@@ -483,7 +483,7 @@ class Installation(unittest.TestCase):
             runner.assert_called_once()
 
     def test_changed_image_or_plan_is_rejected_before_attempt(self):
-        for name in ('candidate.bin','remove-rdp.tcl'):
+        for name in ('candidate.bin','candidate.elf','bootloader.elf','remove-rdp.tcl'):
             with tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp)/'stage';m=stage(ELF,root,PROTECTED)
                 path=root/name;path.write_bytes(path.read_bytes()+b'bad')

@@ -88,6 +88,7 @@ Use the actual recorded identifiers and physical confirmation. These variable na
 
 ```sh
 python3 tools/install.py stage --purpose remove-rdp --elf build/attenuator.elf \
+  --loader-elf build/bootloader.elf \
   --directory .local/erase-plan --device STM32F103C8T6 \
   --unit "$UNIT_LABEL" --serial "$STLINK_SERIAL" --profile native-swd \
   --dpidr "$EXACT_DPIDR" --idcode "$EXACT_IDCODE" \
@@ -95,7 +96,7 @@ python3 tools/install.py stage --purpose remove-rdp --elf build/attenuator.elf \
   --physical-confirmation sole-wired-target-confirmed
 ```
 
-This creates image copies, a schema-2 hash manifest, `remove-rdp.tcl` and `post-rdp-status.tcl`. It does **not** open USB/SWD. It cannot generate programming phases and refuses a supplied UID. Keep the directory private: plans, confirmations, transcripts and receipts contain unit/programmer identity. Review the complete plans and image hashes before execution.
+This validates both ELF/BIN pairs and creates a 64 KiB combined loader/app/CRC image, ELF copies, a schema-3 hash manifest, `remove-rdp.tcl` and `post-rdp-status.tcl`. It does **not** open USB/SWD. It cannot generate programming phases and refuses a supplied UID. Keep the directory private: plans, confirmations, transcripts and receipts contain unit/programmer identity. Review the complete plans and image hashes before execution.
 
 ## Irreversible protection removal — separate opt-in action
 
@@ -131,13 +132,14 @@ Stage a separate programming manifest **offline** with this actual UID:
 
 ```sh
 python3 tools/install.py stage --purpose program --elf build/attenuator.elf \
+  --loader-elf build/bootloader.elf \
   --directory .local/program-plan --device STM32F103C8T6 \
   --unit "$UNIT_LABEL" --serial "$STLINK_SERIAL" --profile native-swd \
   --dpidr "$EXACT_DPIDR" --idcode "$EXACT_IDCODE" --uid "$MCU_UID_WORDS" \
   --obr "$UNPROTECTED_OBR" --wrpr "$EXACT_WRPR"
 ```
 
-This manifest can generate only `flash.tcl`, `verify.tcl` and `start.tcl`; it contains no protection-removal phase. Recheck that the selected ELF/BIN hashes equal the reviewed replacement. All later programming and mailbox operations require exact full IDCODE/UID, adapter serial and image identity.
+This manifest can generate only `flash.tcl`, `verify.tcl` and `start.tcl`; it contains no protection-removal phase. Recheck both selected ELF/BIN pairs and the combined image hash against the reviewed replacement. The staged `candidate.bin` is the complete 64 KiB combined image, not the app-only BIN. All later programming and mailbox operations require exact full IDCODE/UID, adapter serial and image identity.
 
 ## Flash, verify and first boot — separate device phases
 
@@ -156,7 +158,7 @@ python3 tools/install.py execute --directory .local/program-plan --phase start
 
 The distinct `RESET-START` confirmation permits verification followed by `reset run`. Boot requests 0.00 dB with default permutation 0. Use [mailbox status](mailbox.md) with the exact post-POR UID to read state, selected mapping and issued count. Neither image verification nor mailbox acknowledgment establishes RF attenuation.
 
-After hardware qualification, disconnect programmer power before reconnecting USB. Reassemble without pinching wires or the OLED ribbon, then use CH340 serial `set`/`get`. V1 omits display/button support. **USB firmware updates are future work when a bootloader is added; v1 updates require SWD.**
+After hardware qualification, disconnect programmer power before reconnecting USB. Reassemble without pinching wires or the OLED ribbon, then use CH340 serial `set`/`get`. V1 omits display/button support. **The current UART loader awaits target qualification.** After the combined image passes SWD verification and initial USB commands, test an app-only USB update before removing programmer access. See [USB update/recovery](usb-update.md). Never flash `attenuator.bin` at `0x08000000`; it is linked for `0x08002000` and requires the loader and metadata.
 
 ## Troubleshooting
 
