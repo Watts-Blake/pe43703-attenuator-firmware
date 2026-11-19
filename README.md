@@ -2,9 +2,9 @@
 
 **Display changes but attenuation doesn't? USB/serial commands have no effect, the PC software doesn't work, or the `wv` command gets no reply?** This project develops replacement firmware for a LiebeWH-style OLED digital programmable attenuator: the aluminium, SMA-to-SMA, STM32F103C8T6 + PE43703 board listed as a USB-programmable 0–31.75 dB, 0.25 dB-step, 6 GHz digital RF attenuator.
 
-**Status: the earlier application was flashed, image-verified and tested through the SWD mailbox on one unit.** Mapping 0 produced the reversible RF responses below. The current build adds a UART bootloader and relocates the app; that new image is offline-tested and still awaits target flash/verify, CH340 set/get and one USB app-update test. No prebuilt release is offered before those checks pass. The advertised frequency range is a product description, not a measured performance claim.
+**Status: the current loader/app image passed SWD flash, independent verification, USB serial commands and one same-image USB app update on one examined unit.** [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0) include combined, app-only and loader BIN/HEX files plus checksums. Display/buttons remain unsupported. These results do not establish compatibility with every similar board or calibrated RF performance. The advertised frequency range is a product description, not a measured claim.
 
-In that comparison, a phone reported about −85 dBm RSRP before a 20.00 dB command, then −103 dBm about 5 and 15 seconds afterward. After the zero command it returned to −85 dBm at both follow-up samples. This roughly 18 dB reported change supports control with SI=PB11, CLK=PB12, LE=PB13. Phone RSRP and the test enclosure do not establish calibrated attenuation accuracy, insertion loss or performance across the advertised frequency range.
+In earlier SWD-mailbox tests of the preceding app image, a phone reported about −85 dBm RSRP before a 20.00 dB command, then −103 dBm about 5 and 15 seconds afterward. After the zero command it returned to −85 dBm at both follow-up samples. This roughly 18 dB reported change supports control with SI=PB11, CLK=PB12, LE=PB13. Phone RSRP and the test enclosure do not establish calibrated attenuation accuracy, insertion loss or performance across the advertised frequency range.
 
 A separate 31.75 dB command produced about −108 dBm RSRP at samples roughly 7, 19 and 27 seconds into its 30-second hold, from a −85 dBm baseline. After zero, readings returned to −86 and −85 dBm roughly 10 and 20 seconds later. Reported SNR fell from about 23.8 dB to 2.4–3.0 dB and recovered. The approximately 23 dB RSRP drop is consistent with an enclosure leakage floor near −108 dBm; it does not establish 31.75 dB attenuation accuracy.
 
@@ -36,7 +36,7 @@ The text format comes from static inspection of the bundled tool in [att6000_con
 | --- | --- | --- |
 | PB11/PB12/PB13 | SI/CLK/LE in selectable order | Mapping 0 functionally tested on one unit; connections not continuity-traced |
 | PA4–PA7 | Idle floating inputs | Possible display role is a hypothesis; protocol unknown |
-| PA9 / PA10 | USART1 TX / RX | Intended replacement interface; board UART traces unverified |
+| PA9 / PA10 | USART1 TX / RX | CH340 command/reply and app update tested on one unit; traces not continuity-checked |
 | PA13 / PA14 | SWDIO / SWCLK | Preserve SWD; no debug-port remap |
 
 [Hardware installation guide](docs/install.md) · [Mailbox and mapping selection](docs/mailbox.md) · [Design references and limits](docs/design.md)
@@ -53,7 +53,7 @@ make inspect
 
 ELF, BIN, HEX, map and disassembly files are written to `build/` for both loader and app. `combined.bin`/`.hex` contain the loader, app and committed CRC metadata for initial SWD installation; `attenuator.bin` is the app-only USB update. The 64 KiB flash layout reserves 8 KiB for the loader, 55 KiB for app and 1 KiB for metadata. RAM reserves eight bytes for the reset request and at least 2 KiB for stack. Tests use simulated GPIO/flash, a Tcl model and a local pseudo-terminal. They never launch OpenOCD or contact a physical USB, UART or SWD device. [Validation notes](docs/validation.md) describe coverage and what remains untested.
 
-## USB serial use after hardware qualification
+## USB serial use
 
 Connect the board's CH340 micro-USB port, select its exact serial port in a terminal at **115200, 8 data bits, no parity, 1 stop bit, no flow control**, and send one command at a time. Wait for the complete response before sending the next command.
 
@@ -68,13 +68,15 @@ ok 0.00
 
 Commands accept CR, LF or CRLF. Values must be 0–31.75 dB in exact 0.25 dB steps, with one or two digits before the optional decimal point and up to two after it. Responses always use two decimal places and CRLF. Invalid syntax, range, overlong input or UART errors return `err` at the line boundary without applying that line. A partial line occupies at most 31 bytes and waits for its terminator. An overlong/bad line is discarded through its terminator; then a fresh command can be sent. There is no command echo, unsolicited boot banner or persistent setting storage.
 
-**USB updates:** the CH340 is a USB-to-UART bridge. The new UART loader is implemented but awaits hardware qualification. After initial SWD installation of the combined image, `tools/usb_update.py` requests app entry with `bootloader`, uploads an app-only image, verifies CRC and checks `get` after restart. See the [update and recovery guide](docs/usb-update.md). Keep SWD available until both USB commands and an app update have been tested on the unit.
+**Observed on one unit:** `get` returned `0.00\r\n`; `set 20.00` returned `ok 20.00\r\n`. After a monotonic 20-second hold, `set 0` returned `ok 0.00\r\n` and `get` returned `0.00\r\n`, with the display/button board connected.
+
+**USB updates:** the CH340 is a USB-to-UART bridge. One same-image, 2,156-byte app update passed through the UART loader in 34 chunks, with CRC-completion acknowledgment and `get` returning zero after app start. This exercised the update path, without a version change or independent post-update SWD readback. CRC detects corruption; it is not authentication. After initial SWD installation, use the [app-only update guide](docs/usb-update.md). Keep SWD access until command and app-update checks pass on the particular unit.
 
 ## FAQ
 
 ### Why doesn't my USB attenuator change attenuation?
 
-On the examined STM32F103 attenuator, the stock display and serial path did not establish that a new value was latched into the PE43703. A displayed number or accepted host write is not an RF measurement. Board variants, framing, UART wiring, firmware behavior and measurement conditions all matter. The replacement issues the complete RF control transaction and replies afterward; its physical wiring and RF outcome still need qualification.
+On the examined STM32F103 attenuator, the stock display and serial path did not establish that a new value was latched into the PE43703. A displayed number or accepted host write is not an RF measurement. Board variants, framing, UART wiring, firmware behavior and measurement conditions all matter. The replacement issues the complete RF control transaction and replies afterward. The single-unit functional results above passed; continuity, calibrated RF performance and other board variants remain unqualified.
 
 ### Can I restore the original firmware after removing protection?
 
@@ -82,7 +84,7 @@ No backup is available. Removing STM32F1 read protection erases the original fir
 
 ### Will the OLED and five buttons work?
 
-V1 deliberately omits display/button support. Initial tests use a detached display, with no writes on PA4–PA7. The display interface has not been identified.
+V1 omits display/button support and makes no writes on PA4–PA7. Initial SWD tests used a detached display; USB qualification passed with the display/button board reconnected. The display interface has not been identified.
 
 ### Is `get` a measurement?
 
