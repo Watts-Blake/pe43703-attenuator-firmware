@@ -1,0 +1,39 @@
+# Design and primary references
+
+## Serial control
+
+[PE43703 datasheet 70-0245-05](https://www.psemi.com/wp-content/uploads/pdf/obs/pe43703ds.pdf), pp. 7–11, tables 5/7/8/10–13 and figure 29, is the serial/voltage authority. It agrees with a 16-bit transaction: Q0–Q6 hold attenuation ×4, Q7/D7 is zero, Q8–Q10 carry address A0–A2, and Q11–Q15 are don't-care address bits set to zero here. Q0 enters first. Address is fixed at zero. Data shifts on rising CLK while LE stays low; LE then goes high and low.
+
+The device allows up to 10 MHz serial clock, with minimum CLK high/low and LE high times of 30 ns and SI setup/hold and last-CLK-to-LE setup of 10 ns. Firmware uses 1 µs delay intervals around transitions, including before/after LE. This is conservative software timing, not measured pad timing. Serial mode requires P/S high, grounded parallel inputs and matching address straps. PE43703 logic high requires at least 2.6 V; logic low at most 1 V. Verify the actual supplies and levels before hardware use.
+
+## STM32 clock, GPIO, reset and UART
+
+[ST DS5319, STM32F103x8/xB datasheet](https://www.st.com/resource/en/datasheet/stm32f103c8.pdf), clock tree, memory and pin tables, establishes the 72 MHz maximum core/APB2 clock, 36 MHz APB1 limit, 64 KiB flash for C8, 20 KiB SRAM, LQFP48 pinout and 2.0–3.6 V MCU supply range. Logic compatibility with the RF chip must be checked at the actual supply and load.
+
+The following official ST source files provide directly inspectable register definitions and behavior, checked alongside the datasheet. [RM0008](https://www.st.com/resource/en/reference_manual/cd00171190.pdf) is an additional reference, but its retrieval failed during this review; no claim of reviewing it is made. No ST source code is copied into the implementation:
+
+| Primary source | Behavior checked |
+| --- | --- |
+| [CMSIS stm32f103xb.h](https://github.com/STMicroelectronics/cmsis-device-f1/blob/master/Include/stm32f103xb.h) | RCC/FLASH/GPIO/USART addresses and masks; medium-density IRQ numbering; UID base; BSRR set/reset bits |
+| [ST HAL RCC driver](https://github.com/STMicroelectronics/stm32f1xx-hal-driver/blob/master/Src/stm32f1xx_hal_rcc.c) | HSI reset source, reset floating GPIOs, peripheral-clock readback delay, prescalers and flash latency ordering/table |
+| [ST CMSIS system template](https://github.com/STMicroelectronics/cmsis-device-f1/blob/master/Source/Templates/system_stm32f1xx.c) | Reset-time initialization, VTOR and clock source assumptions |
+| [ST HAL UART driver](https://github.com/STMicroelectronics/stm32f1xx-hal-driver/blob/master/Src/stm32f1xx_hal_uart.c) and [UART definitions](https://github.com/STMicroelectronics/stm32f1xx-hal-driver/blob/master/Inc/stm32f1xx_hal_uart.h) | USART1 uses PCLK2; BRR arithmetic; SR-then-DR receive error clearing |
+| [ST HAL flash definitions](https://github.com/STMicroelectronics/stm32f1xx-hal-driver/blob/master/Inc/stm32f1xx_hal_flash.h) | Flash latency configuration and prefetch control |
+
+Primary definitions were inspected on 2026-11-19. Implementation assumes hardware reset entry, not a jump from arbitrary bootloader/peripheral state. Startup initializes data/BSS, the dedicated mailbox and VTOR. It waits a maximum 1,000,000 register polls at each HSE-ready, PLL-ready and clock-switch step. Failure parks with interrupts disabled and `state=2` before enabling GPIO drivers or command input. This is a bounded poll count, not a calibrated timeout in milliseconds. There is no ongoing oscillator-failure recovery or watchdog.
+
+FLASH_ACR prefetch and two wait states are written and read back before switching to HSE×9. AHB/APB2 are /1, APB1 /2, ADC /6. SysTick is a 24-bit free-running down-counter at the 72 MHz core clock, without interrupts; delays use masked unsigned subtraction and intervals shorter than one wrap. The 1 ms boot delay is a guard interval, not power-good measurement.
+
+PB11–PB13 output latches are preloaded low with one BSRR write before enabling 2 MHz push-pull outputs. Each transition updates only those pins via BSRR. PA4–PA7 remain reset inputs; no OLED protocol is inferred. USART1 uses PA9 AF push-pull and PA10 floating input; BRR=625 (`39 + 1/16`) gives 115200 at PCLK2=72 MHz. Reset CR2/CR3 and configured CR1 give 8N1 without flow control or interrupts. UART transmit waits are bounded; receive errors discard the current line. Clients must wait for each reply, since continuous pipelining can overrun this polling interface.
+
+## Destructive installation semantics
+
+[ST PM0075 Rev 2 §2.4.1](https://www.st.com/resource/en/programming_manual/cd00283419-stm32f10xxx-flash-memory-microcontrollers-stmicroelectronics.pdf) specifies mass erase when changing F1 RDP to unprotected and power-on reset afterward. [OpenOCD's STM32F1 flash commands](https://openocd.org/doc/html/Flash-Commands.html) document `stm32f1x unlock 0` as destructive on a protected unit. The tooling does not attempt protection bypass, readout exploits or recovery of protected stock code.
+
+Plans explicitly support two native ST-Link profiles: `native-swd` uses the newer `interface/stlink.cfg` with `swd`; `native-dapdirect` uses OpenOCD 0.12.0 `interface/stlink-dap.cfg` with `dapdirect_swd`. There is no transport fallback. `tools/swd.py` defers Cortex-M examination before `init`, removes the included examine-end MMIO write hook, selects a memory-only AP0 target, disables server ports, and sets 100 kHz after included configurations. Mailbox/status and pre-identity checks request no core examination or MCU memory writes. Attachment still involves debugger/adapter activity whose opaque physical effects are not excluded by offline tests. Intentional core examination/reset/halt for installation occurs only after the relevant identity checks.
+
+Erase identity is explicitly different from programming identity: a protected target can make UID/system-memory reads unavailable. Erase requires an attended sole-wired-target assertion, exact adapter serial, DPIDR/full IDCODE, and exact recorded OBR/WRPR. It never reads UID or density. After actual POR, a separate read-only phase checks inactive protection, preserved options, actual 64 KiB density and a real UID. All programming and mailbox operations then require that UID. No invented UID, silent guard removal or alternate-target scan is supported.
+
+The [OpenOCD STM32F1 driver](https://github.com/openocd-org/openocd/blob/v0.12.0/src/flash/nor/stm32f1x.c) ignores an option-read return value before rewriting the option block, and its unlock handler can return success despite erase/write failure. Consequently the generated removal plan **does not call `stm32f1x unlock`**. It uses the checked PM0075 FPEC sequence directly: validate OBR/WRPR before and after reset/halt; enable HSI; unlock FPEC/options; erase options; restore every non-RDP byte from the validated snapshot; program RDP `0xa5` last, causing mass erase; verify each option byte/complement; and lock FPEC. Each status poll is bounded, every read/write error aborts, and no flash-bank probe or guessed density is used. Failure can leave partial options or an erased unit; no retry/recovery is automatic. Actual POR and post-POR option/protection checks remain mandatory.
+
+The execution wrapper preserves stdout/stderr and a completion receipt, requires phase-specific success evidence as well as an error-free exit, and consumes one attempt before opening the adapter. Timeout, missing evidence, error diagnostics and partial completion remain unknown/failed outcomes, never permission to repeat unprotection.
