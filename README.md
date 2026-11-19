@@ -6,7 +6,23 @@
 
 In earlier SWD-mailbox tests of the preceding app image, a phone reported about −85 dBm RSRP before a 20.00 dB command, then −103 dBm about 5 and 15 seconds afterward. After the zero command it returned to −85 dBm at both follow-up samples. This roughly 18 dB reported change supports control with SI=PB11, CLK=PB12, LE=PB13. Phone RSRP and the test enclosure do not establish calibrated attenuation accuracy, insertion loss or performance across the advertised frequency range.
 
-A separate 31.75 dB command produced about −108 dBm RSRP at samples roughly 7, 19 and 27 seconds into its 30-second hold, from a −85 dBm baseline. After zero, readings returned to −86 and −85 dBm roughly 10 and 20 seconds later. Reported SNR fell from about 23.8 dB to 2.4–3.0 dB and recovered. The approximately 23 dB RSRP drop is consistent with an enclosure leakage floor near −108 dBm; it does not establish 31.75 dB attenuation accuracy.
+A separate 31.75 dB command produced about −108 dBm RSRP at samples roughly 7, 19 and 27 seconds into its 30-second hold, from a −85 dBm baseline. After zero, readings returned to −86 and −85 dBm roughly 10 and 20 seconds later. Reported SNR fell from about 23.8 dB to 2.4–3.0 dB and recovered. The approximately 23 dB RSRP drop does not establish 31.75 dB attenuation accuracy. An enclosure leakage floor was an initial interpretation of this earlier observation, rather than an established cause.
+
+In a later closed-enclosure USB staircase with the released loader/app, each setting below was acknowledged and held for 15 seconds, in the listed order, before a final `set 0` / `get` confirmed requested zero. A phone reported:
+
+| Requested dB | Reported RSRP (dBm) | Drop from initial zero (dB) |
+| --- | --- | --- |
+| 0.00 | −85 | 0 |
+| 10.00 | −95 | 10 |
+| 15.00 | −101 | 16 |
+| 20.00 | −105 | 20 |
+| 22.00 | −107 | 22 |
+| 25.00 | −109 | 24 |
+| 28.00 | −110 | 25 |
+| 30.00 | −110 | 25 |
+| 31.75 | −110 | 25 |
+
+The relative observed response was within about 1 dB of the requested change through roughly 22–25 dB. At the highest settings, RSRP flattened near −110 dBm while reported SNR fell from about 21 dB toward 0 dB. This saturation is consistent with the phone measurement/noise floor. Phone RSRP/SNR alone cannot identify the limiting path or exclude RF leakage; these results do not establish calibrated attenuation accuracy, insertion loss or frequency response.
 
 ## Board and original-firmware symptoms
 

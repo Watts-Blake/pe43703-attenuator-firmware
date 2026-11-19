@@ -32,7 +32,25 @@ One same-image USB app update then passed: `bootloader` acknowledgment, exact lo
 
 This was a same-image erase/write/CRC/start test. It does not prove a different-version upgrade, authenticated firmware, independent post-USB flash readback or physical interrupted-update recovery. CRC is an integrity check, not authentication. No SWD readback was performed after the USB update. Command acknowledgment and GET are not RF measurements.
 
-[v0.1.0](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0) publishes the six BIN/HEX files and `SHA256SUMS`. All seven downloaded files were compared with the approved artifacts and all six image checksums passed. Assets were built from [6ed560c](https://github.com/Watts-Blake/pe43703-attenuator-firmware/commit/6ed560c7684230b8fd2d0c95c9c90999d3f3609f); the release target [5df8ea6](https://github.com/Watts-Blake/pe43703-attenuator-firmware/commit/5df8ea63036cb79eda40330bc25da7e1e4d4cf5d) has identical firmware, tools and Makefile. Historical RF results below apply to the preceding app image.
+[v0.1.0](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0) publishes the six BIN/HEX files and `SHA256SUMS`. All seven downloaded files were compared with the approved artifacts and all six image checksums passed. Assets were built from [6ed560c](https://github.com/Watts-Blake/pe43703-attenuator-firmware/commit/6ed560c7684230b8fd2d0c95c9c90999d3f3609f); the release target [5df8ea6](https://github.com/Watts-Blake/pe43703-attenuator-firmware/commit/5df8ea63036cb79eda40330bc25da7e1e4d4cf5d) has identical firmware, tools and Makefile. The earlier-application section records qualification of the preceding app image.
+
+### Closed-enclosure USB staircase and phone observations
+
+After the same-image USB update, an initial GET confirmed requested zero. The following nine settings were issued in order, each acknowledged and held for at least 15 seconds using a monotonic deadline. There were no intermediate zero commands. Final SET0/GET0 confirmed requested zero, then the serial port was closed and released.
+
+| Requested dB | Reported RSRP (dBm) | Drop from initial zero (dB) |
+| --- | --- | --- |
+| 0.00 | −85 | 0 |
+| 10.00 | −95 | 10 |
+| 15.00 | −101 | 16 |
+| 20.00 | −105 | 20 |
+| 22.00 | −107 | 22 |
+| 25.00 | −109 | 24 |
+| 28.00 | −110 | 25 |
+| 30.00 | −110 | 25 |
+| 31.75 | −110 | 25 |
+
+The relative observed response was within about 1 dB of the requested change through roughly 22–25 dB. At the highest settings, RSRP flattened near −110 dBm while reported SNR fell from about 21 dB toward 0 dB. This saturation is consistent with the phone measurement/noise floor. Phone RSRP/SNR alone cannot identify the limiting path or exclude RF leakage; these results do not establish calibrated attenuation accuracy, insertion loss or frequency response. The earlier enclosure-leakage interpretation in the README is historical, not a demonstrated explanation of either test.
 
 ## Earlier application — single-unit evidence
 
