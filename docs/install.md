@@ -1,6 +1,6 @@
 # Installation on a stock STM32F103C8T6 + PE43703 board
 
-One unit has completed standard-driver RDP removal, actual power cycling, post-POR identity checks, image flash/verification and a permutation-0 mailbox/RF comparison. USB serial testing remains pending. These results apply to that unit; verify wiring and power on every board before installing.
+One unit has completed standard-driver RDP removal, actual power cycling, post-POR identity checks, image flash/verification and a permutation-0 mailbox/RF comparison. The current loader/app also passed USB set/get and one same-image app update on that unit; see the [qualification record](validation.md). These results apply to that unit; verify wiring and power on every board before installing.
 
 ## Equipment and disassembly
 
