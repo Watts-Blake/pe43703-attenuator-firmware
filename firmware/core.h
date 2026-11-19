@@ -39,7 +39,8 @@ void mailbox_publish(volatile Mailbox *m, const Controller *c);
 bool mailbox_poll(volatile Mailbox *m, Controller *c);
 bool parse_db(const char *text, uint32_t *qdb);
 void format_db(uint32_t qdb, char out[6]);
-/* Returns response length; receives one byte at a time, discarding a bad line. */
-typedef struct { char data[32]; uint32_t used; bool discard, bootloader; } Line;
+/* Returns response length; receives one byte at a time, discarding a bad line.
+   A valid ADC request instead sets Line.adc for immediate console dispatch. */
+typedef struct { char data[32]; uint32_t used; bool discard, bootloader, adc; } Line;
 size_t line_feed(Line *line, Controller *c, char ch, bool rx_error, char out[16]);
 #endif

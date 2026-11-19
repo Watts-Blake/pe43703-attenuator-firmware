@@ -1,4 +1,5 @@
 #include "core.h"
+#include "adc.h"
 #include "layout.h"
 #define REG(address) (*(volatile uint32_t *)(address))
 #define RCC_CR REG(0x40021000u)
@@ -44,6 +45,12 @@ static void delay_us(void *context, uint32_t us) {
     uint32_t ticks = us * 72u;
     while (((start - SYST_CVR) & 0xffffffu) < ticks) { }
 }
+static uint32_t adc_read(void *context, uint32_t address) {
+    (void)context; return REG(address);
+}
+static void adc_write(void *context, uint32_t address, uint32_t value) {
+    (void)context; REG(address) = value;
+}
 static void park(void) {
     __asm__ volatile ("cpsid i" ::: "memory");
     for (;;) __asm__ volatile ("wfi");
@@ -73,14 +80,15 @@ void Reset_Handler(void) {
     USART_CR1 = (1u << 13) | (1u << 3) | (1u << 2); /* 8N1, no IRQ */
     mailbox_publish(&mailbox, &controller);
     __asm__ volatile ("dmb" ::: "memory"); mailbox.state = MB_READY;
-    Line line; line.used=0; line.discard=false; line.bootloader=false;
+    Line line; line.used=0; line.discard=false; line.bootloader=false; line.adc=false;
+    const AdcIo adc = { adc_read, adc_write, delay_us, 0 };
     for (;;) {
         mailbox_poll(&mailbox, &controller);
         uint32_t sr = USART_SR;
         if (sr & ((1u << 5) | 15u)) {
             char ch = (char)USART_DR; /* SR then DR clears RXNE and receive errors */
             char out[16];
-            size_t n = line_feed(&line, &controller, ch, (sr & 15u) != 0, out);
+            size_t n = console_feed(&line, &controller, &adc, ch, (sr & 15u) != 0, out);
             mailbox_publish(&mailbox, &controller);
             for (size_t i = 0; i < n; ++i) {
                 if (!wait_bits(&USART_SR, 1u << 7, 1u << 7)) park();

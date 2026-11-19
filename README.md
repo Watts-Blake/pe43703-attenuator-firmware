@@ -82,7 +82,9 @@ set 0
 ok 0.00
 ```
 
-Commands accept CR, LF or CRLF. Values must be 0–31.75 dB in exact 0.25 dB steps, with one or two digits before the optional decimal point and up to two after it. Responses always use two decimal places and CRLF. Invalid syntax, range, overlong input or UART errors return `err` at the line boundary without applying that line. A partial line occupies at most 31 bytes and waits for its terminator. An overlong/bad line is discarded through its terminator; then a fresh command can be sent. There is no command echo, unsolicited boot banner or persistent setting storage.
+Commands accept CR, LF or CRLF. Values must be 0–31.75 dB in exact 0.25 dB steps, with one or two digits before the optional decimal point and up to two after it. Attenuation responses always use two decimal places and CRLF. Invalid syntax, range, overlong input or UART errors return `err` at the line boundary without applying that line. A partial line occupies at most 31 bytes and waits for its terminator. An overlong/bad line is discarded through its terminator; then a fresh command can be sent. There is no command echo, unsolicited boot banner or persistent setting storage.
+
+**v0.1.1 development diagnostic:** `adc` (alias `diag adc`) returns one raw PA1 sample as `adc NNNN\r\n`, or `err adc\r\n` on a bounded ADC failure. It is inactive until requested and does not change attenuation. This addition is offline-tested and absent from the published v0.1.0 images; button thresholds and the display interface remain unqualified. `version` reports `version 0.1.1`. See [input diagnostics](docs/diagnostics.md).
 
 **Observed on one unit:** `get` returned `0.00\r\n`; `set 20.00` returned `ok 20.00\r\n`. After a monotonic 20-second hold, `set 0` returned `ok 0.00\r\n` and `get` returned `0.00\r\n`, with the display/button board connected.
 

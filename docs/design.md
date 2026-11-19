@@ -10,7 +10,7 @@ The device allows up to 10 MHz serial clock, with minimum CLK high/low and LE hi
 
 [ST DS5319, STM32F103x8/xB datasheet](https://www.st.com/resource/en/datasheet/stm32f103c8.pdf), clock tree, memory and pin tables, establishes the 72 MHz maximum core/APB2 clock, 36 MHz APB1 limit, 64 KiB flash for C8, 20 KiB SRAM, LQFP48 pinout and 2.0–3.6 V MCU supply range. Logic compatibility with the RF chip must be checked at the actual supply and load.
 
-The following official ST source files provide directly inspectable register definitions and behavior, checked alongside the datasheet. [RM0008](https://www.st.com/resource/en/reference_manual/cd00171190.pdf) is an additional reference, but its retrieval failed during this review; no claim of reviewing it is made. No ST source code is copied into the implementation:
+The following official ST source files provide directly inspectable register definitions and behavior, checked alongside the datasheet. The ADC implementation additionally follows [RM0008 Rev21](https://www.st.com/resource/en/reference_manual/cd00171190.pdf), §§11.3.1, 11.3.4, 11.4 and 11.12, checked through the manufacturer-authored distributor copy linked in [input diagnostics](diagnostics.md). No ST source code is copied into the implementation:
 
 | Primary source | Behavior checked |
 | --- | --- |
@@ -25,6 +25,10 @@ Primary definitions were inspected on 2026-11-19. The loader starts at hardware 
 FLASH_ACR prefetch and two wait states are written and read back before switching to HSE×9. AHB/APB2 are /1, APB1 /2, ADC /6. SysTick is a 24-bit free-running down-counter at the 72 MHz core clock, without interrupts; delays use masked unsigned subtraction and intervals shorter than one wrap. The 1 ms boot delay is a guard interval, not power-good measurement.
 
 PB11–PB13 output latches are preloaded low with one BSRR write before enabling 2 MHz push-pull outputs. Each transition updates only those pins via BSRR. PA4–PA7 remain reset inputs; no OLED protocol is inferred. USART1 uses PA9 AF push-pull and PA10 floating input; BRR=625 (`39 + 1/16`) gives 115200 at PCLK2=72 MHz. Reset CR2/CR3 and configured CR1 give 8N1 without flow control or interrupts. UART transmit waits are bounded; receive errors discard the current line. Clients must wait for each reply, since continuous pipelining can overrun this polling interface.
+
+## Input-only ADC diagnostic
+
+`firmware/adc.c` owns ADC1 only during an explicit `adc` / `diag adc` UART request. The parser delegates exactly that valid line to the synchronous bounded diagnostic; normal traffic does not access ADC or PA1. ADC1 is reset per request, channel 1 is sampled once at APB2/6 with 239.5-cycle acquisition, and cleanup restores PA1 plus the ADC clock/reset state on success or timeout. The driver refuses an already-enabled/reset ADC rather than destroying another owner’s state. The PE43703 controller and mailbox ABI are unchanged. See [diagnostic commands, timing and hardware limits](diagnostics.md).
 
 ## Destructive installation semantics
 
