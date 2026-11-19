@@ -61,7 +61,7 @@ For stable two-unit USB control and timed schedules, see [attctl](docs/attctl.md
 
 ## Build and offline checks
 
-Install GNU Arm Embedded tools (`arm-none-eabi-gcc`, binutils), a C11 host compiler, GNU Make, Python 3.10+ and Tcl (`tclsh`). No SDK, heap, runtime library or Python package installation is needed.
+Install GNU Arm Embedded tools (`arm-none-eabi-gcc`, binutils), a C11 host compiler, GNU Make, Python 3.10+ and Tcl (`tclsh`). No SDK, heap or runtime library is needed. Serial tools and their tests additionally use `python3 -m pip install -r requirements.txt` (pyserial 3.5); use an isolated environment as described in [host setup](docs/host-tools.md).
 
 ```sh
 make all
@@ -72,6 +72,8 @@ make inspect
 ELF, BIN, HEX, map and disassembly files are written to `build/` for both loader and app. `combined.bin`/`.hex` contain the loader, app and committed CRC metadata for initial SWD installation; `attenuator.bin` is the app-only USB update. The 64 KiB flash layout reserves 8 KiB for the loader, 55 KiB for app and 1 KiB for metadata. RAM reserves eight bytes for the reset request and at least 2 KiB for stack. Tests use simulated GPIO/flash, a Tcl model and a local pseudo-terminal. They never launch OpenOCD or contact a physical USB, UART or SWD device. [Validation notes](docs/validation.md) describe coverage and what remains untested.
 
 ## USB serial use
+
+For a minimal Python set/get CLI on Windows, macOS and Linux, see [host tools and CH340 drivers](docs/host-tools.md): `python tools/attenuator.py get --port COM7` or `python tools/attenuator.py set --port /dev/cu.wchusbserial-example 0`. USB updates use the same pyserial transport. Windows installation/flashing instructions are documented-not-tested.
 
 Connect the board's CH340 micro-USB port, select its exact serial port in a terminal at **115200, 8 data bits, no parity, 1 stop bit, no flow control**, and send one command at a time. Wait for the complete response before sending the next command.
 
