@@ -57,6 +57,8 @@ The text format comes from static inspection of the bundled tool in [att6000_con
 
 [Hardware installation guide](docs/install.md) · [Mailbox and mapping selection](docs/mailbox.md) · [Design references and limits](docs/design.md)
 
+For stable two-unit USB control and timed schedules, see [attctl](docs/attctl.md). The Linux CLI verifies replies, shares an exclusive controller lock, and attempts independent zero cleanup when a profile ends.
+
 ## Build and offline checks
 
 Install GNU Arm Embedded tools (`arm-none-eabi-gcc`, binutils), a C11 host compiler, GNU Make, Python 3.10+ and Tcl (`tclsh`). No SDK, heap, runtime library or Python package installation is needed.
