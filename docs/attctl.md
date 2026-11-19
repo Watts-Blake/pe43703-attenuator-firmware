@@ -76,7 +76,12 @@ extend the schedule; late steps never trigger a catch-up burst.
 Stdout is JSONL with UTC: `applied` records each acknowledged unit/value, `step`
 records both actual acknowledged values and the requested duration, `held`
 records elapsed monotonic seconds, and `cleanup` records each zero outcome.
-Partial application is visible even if the next unit fails. Exit status is 0 on
+Partial application is recorded before starting the next unit when output is writable.
+Output writes have a 0.1-second deadline and a 4096-byte record bound. A stalled
+pipe is a logging failure; cleanup proceeds even if both stdout and stderr are
+full. Cleanup/error reporting occurs after both independent zero attempts, so
+reporting cannot prevent either attempt. Records may be missing or partial when
+the output sink fails; a nonzero exit never claims a complete log. Exit status is 0 on
 success, 1 on validation/runtime/ownership/cleanup failure, or 2 on CLI syntax
 error. An interrupted profile exits nonzero even if cleanup succeeds. Log write
 failure also fails the profile and starts cleanup; cleanup reporting falls back

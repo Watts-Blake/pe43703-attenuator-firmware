@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import fcntl
 import json
+import io
 import os
 from pathlib import Path
 import re
@@ -281,19 +282,45 @@ class Serial:
                 os.close(self.fd)
 
 
+def bounded_output(stream, record):
+    raw = (json.dumps(record, allow_nan=False) + '\n').encode('utf-8')
+    if len(raw) > 4096:
+        raise ValueError('log record exceeds 4096 bytes')
+    if isinstance(stream, io.StringIO):  # In-memory test capture; no external I/O.
+        stream.write(raw.decode('utf-8'))
+        return
+    fd = stream.fileno()
+    was_blocking = os.get_blocking(fd)
+    deadline = time.monotonic() + 0.1
+    try:
+        os.set_blocking(fd, False)
+        while raw:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([], [fd], [], left)[1]:
+                raise TimeoutError('log output backpressure')
+            try:
+                n = os.write(fd, raw)
+            except BlockingIOError:
+                continue
+            if n <= 0:
+                raise OSError('log output closed')
+            raw = raw[n:]
+    finally:
+        os.set_blocking(fd, was_blocking)
+
+
 def emit(event, **fields):
-    print(json.dumps({'utc': datetime.now(timezone.utc).isoformat(), 'event': event, **fields}, allow_nan=False), flush=True)
+    bounded_output(sys.stdout, {'utc': datetime.now(timezone.utc).isoformat(), 'event': event, **fields})
 
 
 def report(event, **fields):
-    """Cleanup reporting must not prevent the next unit's zero attempt."""
+    """Output backpressure must never hold cleanup hostage."""
     try:
         emit(event, **fields)
         return True
     except Exception as exc:
         try:
-            sys.stderr.write(json.dumps({'event': event, **fields, 'logging_error': str(exc)}) + '\n')
-            sys.stderr.flush()
+            bounded_output(sys.stderr, {'utc': datetime.now(timezone.utc).isoformat(), 'event': event, **fields, 'logging_error': str(exc)})
         except Exception:
             pass
         return False
@@ -311,6 +338,7 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
     resolver = resolver or Resolver(devices)
     labels = ('A', 'B') if steps is not None or target == 'both' else (target,)
     links, failed = {}, False
+    error, reports = None, []
     with locked(lock_path):
         handlers = {s: signal.signal(s, interrupt) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
         try:
@@ -338,7 +366,7 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
                     emit('held', step=index, elapsed=time.monotonic() - started)
         except Exception as exc:
             failed = True
-            report('error', error=str(exc), status='failed')
+            error = str(exc)
         finally:
             # Further signals cannot interrupt the bounded independent cleanup attempts.
             for s in handlers:
@@ -351,16 +379,21 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
                         links[label].zero()
                     except Exception as exc:
                         failed = True
-                        report('cleanup', unit=label, status='failed', error=str(exc))
+                        reports.append(('cleanup', {'unit': label, 'status': 'failed', 'error': str(exc)}))
                     else:
-                        if not report('cleanup', unit=label, value='0.00', status='zero_confirmed'):
-                            failed = True
+                        reports.append(('cleanup', {'unit': label, 'value': '0.00', 'status': 'zero_confirmed'}))
             for label, link in links.items():
                 try:
                     link.close()
                 except Exception as exc:
                     failed = True
-                    report('close', unit=label, status='failed', error=str(exc))
+                    reports.append(('close', {'unit': label, 'status': 'failed', 'error': str(exc)}))
+            # No output operation precedes or separates the independent zero attempts.
+            if error is not None:
+                reports.append(('error', {'error': error, 'status': 'failed'}))
+            for event, fields in reports:
+                if not report(event, **fields):
+                    failed = True
             for s, handler in handlers.items():
                 signal.signal(s, handler)
     return 1 if failed else 0

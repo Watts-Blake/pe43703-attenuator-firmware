@@ -273,6 +273,68 @@ sys.exit(3)
         self.assertEqual(termios.tcgetattr(self.units[0].slave), saved)
         self.assertEqual(self.units[0].commands, [])
 
+    @unittest.skipUnless(Path('/proc/self/fd').is_dir(), 'Linux /proc required')
+    def test_real_full_output_pipes_cannot_block_zero_cleanup(self):
+        child_code = r"""
+import os,sys
+from pathlib import Path
+sys.path.insert(0,'tools')
+import attctl as a
+ports={'A':sys.argv[1],'B':sys.argv[2]}
+class Resolver:
+ def resolve(self,label):
+  p=ports[label];return (p,label,os.stat(p).st_rdev,'1','2')
+a.Resolver=lambda devices:Resolver()
+glob=Path.glob
+def scoped(self,pattern):
+ if str(self)=='/proc':return iter([Path('/proc/'+str(os.getpid()))])
+ return glob(self,pattern)
+Path.glob=scoped
+run=a.run
+a.run=lambda *args,**kw:run(*args,**kw,lock_path=sys.argv[3],timeout=.2)
+raise SystemExit(a.main(['--config',sys.argv[4],'profile',sys.argv[5]]))
+"""
+        settings = self.root / 'config'
+        settings.write_text(json.dumps({'version': 1, 'devices': {label: {'usb_path': path, 'vid': '1a86', 'pid': '7523'} for label, path in [('A', '2-3.4'), ('B', '2-3.5')]}}))
+        schedule = self.root / 'profile'
+        schedule.write_text(json.dumps({'version': 1, 'steps': [{'A': 12, 'B': 20, 'duration': 30}]}))
+        for full_stdout, full_stderr, send_signal, mismatch in [(True, False, False, False), (True, True, True, False), (False, True, False, True)]:
+            with self.subTest(stdout=full_stdout, stderr=full_stderr, signal=send_signal, mismatch=mismatch):
+                units = [Unit(), Unit('mismatch' if mismatch else 'normal')]
+                pipes = [os.pipe(), os.pipe()]
+                for (reader, writer), full in zip(pipes, (full_stdout, full_stderr)):
+                    if full:
+                        os.set_blocking(writer, False)
+                        try:
+                            while True: os.write(writer, b'x' * 4096)
+                        except BlockingIOError:
+                            pass
+                        os.set_blocking(writer, True)
+                child = subprocess.Popen([sys.executable, '-c', child_code, *(u.port for u in units), str(self.root / 'child-lock'), str(settings), str(schedule)], cwd=Path(__file__).resolve().parents[1], stdout=pipes[0][1], stderr=pipes[1][1])
+                for reader, writer in pipes: os.close(writer)
+                started = time.monotonic()
+                try:
+                    if send_signal:
+                        deadline = time.monotonic() + 2
+                        while not units[0].commands and time.monotonic() < deadline:
+                            time.sleep(.005)
+                        self.assertTrue(units[0].commands, 'child never applied first SET')
+                        child.send_signal(signal.SIGTERM)
+                    self.assertEqual(child.wait(timeout=3), 1)
+                    self.assertLess(time.monotonic() - started, 3)
+                    for unit in units:
+                        self.assertEqual(unit.value, '0.00')
+                        self.assertEqual(unit.commands[-3:], ['!', 'set 0.00', 'get'])
+                    self.assertEqual(units[0].commands.count('set 12.00'), 1)
+                    if full_stdout:
+                        self.assertNotIn('set 20.00', units[1].commands)
+                    else:
+                        self.assertIn('set 20.00', units[1].commands)
+                finally:
+                    if child.poll() is None: child.kill(); child.wait(timeout=2)
+                    for reader, writer in pipes: os.close(reader)
+                    for unit in units: unit.close()
+
     def test_config_rejects_duplicate_path_and_bad_vid(self):
         devices = {label: {'usb_path': path, 'vid': '1a86', 'pid': '7523'} for label, path in [('A', '2-3.4'), ('B', '2-3.5')]}
         self.assertEqual(a.config(self.file({'version': 1, 'devices': devices})), devices)
