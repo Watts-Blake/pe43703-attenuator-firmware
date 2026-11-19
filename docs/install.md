@@ -47,6 +47,8 @@ Before changing firmware, verify the remaining board assumptions: genuine suppor
 
 ## Build and select the explicit OpenOCD profile
 
+See [cross-platform host setup](host-tools.md#initial-flashing-prerequisites) for macOS Homebrew OpenOCD, Windows xPack OpenOCD or STM32CubeProgrammer plus ST-Link drivers, and [manual POR](host-tools.md#manual-power-on-reset-without-a-switchable-hub) when USB hub switching is unavailable. Windows procedures are documented-not-tested; the staged OpenOCD workflow below remains distinct from manual GUI programming.
+
 Build dependencies are in the README. Install OpenOCD with native ST-Link support and the Cortex-M/memory-AP target drivers. Two reviewed configurations are supported; select one deliberately for every plan:
 
 | Profile | Interface file | Transport |

@@ -1,5 +1,11 @@
 # Validation record
 
+## Portable host tools — offline validation only
+
+The pyserial set/get CLI and updater pass fake-serial and local PTY checks on macOS and Linux. The 18-method portable suite passes all methods on Linux; macOS passes 17 with the Linux controller-lock integration method skipped. It covers native port-name forwarding, bounded partial writes/fragmented reads, malformed replies, timeout/disconnect/no-replay behavior, exact SET acknowledgment plus matching GET, pre-open validation, offline import/help, synthetic app updates and Windows-style staged Tcl paths. Windows branches and COM names are mocked only: **Windows instructions are documented-not-tested**.
+
+Linux also passes the existing 16-method attctl suite (including full output-pipe backpressure and independent cleanup), the updater PTY error method, and host C core/ADC/OLED models. `make all test inspect` could not complete because Arm GCC was unavailable; firmware images, image-dependent tests and boot model were not requalified in this host-tools change. Firmware and attctl source are unchanged. No physical device operation or RF measurement was performed.
+
 ## v0.1.1 development OLED probe — offline validation only
 
 The current development app adds the explicit `oledprobe` role sweep described in [the profile](oled-probe.md). It has not been installed or qualified on hardware. `make all test inspect` passes with Arm GCC 16.2.0: four C executables and 29 Python test methods run offline. The OLED executable also passes AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled.

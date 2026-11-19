@@ -5,6 +5,7 @@ import pty
 import struct
 import sys
 import threading
+import tempfile
 import unittest
 from unittest.mock import patch
 import zlib
@@ -16,6 +17,11 @@ APP = Path(__file__).resolve().parents[1]/'build/attenuator.bin'
 
 
 class Updates(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.serial = lambda port: Serial(port, lock_path=str(Path(directory.name) / "controller.lock"))
+
     def test_bundle_exact_layout_and_crc(self):
         app = APP.read_bytes()
         loader = APP.with_name('bootloader.bin').read_bytes()
@@ -43,7 +49,7 @@ class Updates(unittest.TestCase):
         app = APP.read_bytes()
         master, slave = pty.openpty()
         path = os.ttyname(slave)
-        serial = Serial(path)
+        serial = self.serial(path)
         errors = []
         observed = bytearray()
         def peer():
@@ -85,7 +91,7 @@ class Updates(unittest.TestCase):
 
     def test_serial_timeout_oversize_wrong_reply(self):
         for mode in ('timeout','long','wrong'):
-            master,slave=pty.openpty(); serial=Serial(os.ttyname(slave))
+            master,slave=pty.openpty(); serial=self.serial(os.ttyname(slave))
             if mode=='long': os.write(master,b'x'*65)
             elif mode=='wrong': os.write(master,b'err\n')
             try:

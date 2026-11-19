@@ -8,6 +8,7 @@
 - Explicit diagnostic profiles and limits: docs/diagnostics.md (PA1 ADC) and docs/oled-probe.md (OLED role sweep); both are inactive at boot.
 - This repository is public. Generated plans contain unit/programmer identity and belong in ignored local directories, never commits.
 - `tools/attctl.py` controls two USB units and timed profiles; `docs/attctl.md` defines stable topology binding, exclusive ownership and bounded zero cleanup. PTY tests run with `python3 -m unittest discover -s tests -p test_attctl.py -v`.
+- Portable set/get and USB updates use `tools/serial_port.py` with pyserial (`requirements.txt`); setup, shared Linux locking and platform qualification limits are in `docs/host-tools.md`. Offline coverage: `python3 -m unittest discover -s tests -p test_serial_port.py -v`.
 
 ## Maintaining this file
 

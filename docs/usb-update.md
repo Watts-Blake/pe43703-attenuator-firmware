@@ -16,7 +16,7 @@ Use only the **app-only `attenuator.bin`** with the USB updater. Do not send `co
 
 ## Update after initial SWD installation
 
-Use Python 3.10+ on Linux or macOS; no Python packages are needed. Connect CH340 USB with the programmer's power disconnected. Identify the exact port from the operating system's USB inventory; prefer a stable, unique device path where available. Close terminal programs that hold the port. The updater does not scan for devices or choose a port automatically. No simultaneous SWD mailbox writer is permitted.
+Use Python 3.10+ and `pyserial==3.5` on Windows, macOS or Linux; see [host setup, drivers and platform limits](host-tools.md). Install `requirements.txt` into an isolated environment and use that environment's Python below. Windows instructions are documented-not-tested. Connect CH340 USB with the programmer's power disconnected. Identify the exact port from the operating system's USB inventory (`COM7`, `/dev/cu.*` or `/dev/ttyUSB*`); prefer a stable, unique device path where available. Close terminal programs that hold the port. On Linux the updater takes attctl's shared controller lock before opening the port and refuses a busy/inaccessible lock. The updater does not scan for devices or choose a port automatically. No simultaneous SWD mailbox writer is permitted.
 
 Inspect the app **offline**:
 
@@ -30,6 +30,12 @@ Record its printed SHA256 as `APP_SHA256` and set `SERIAL_PORT` to the identifie
 python3 tools/usb_update.py update --app build/attenuator.bin \
   --port "$SERIAL_PORT" --entry app \
   --confirm "UPDATE $SERIAL_PORT $APP_SHA256"
+```
+
+On Windows PowerShell the equivalent device operation uses a single line (replace both placeholders with the identified port and offline-inspected hash):
+
+```powershell
+python tools/usb_update.py update --app build/attenuator.bin --port COM7 --entry app --confirm "UPDATE COM7 APP_SHA256"
 ```
 
 One command is outstanding at a time. The tool checks the exact loader version/geometry reply before erasing, checks each reply, commits only after full CRC verification, requests app start, then requires `get` to reply `0.00`. That response confirms a requested/issued zero command, not measured insertion loss. Keep stable power throughout the update; no application RF command service runs while the loader is active.

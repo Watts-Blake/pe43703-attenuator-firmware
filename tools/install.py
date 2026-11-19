@@ -132,7 +132,7 @@ def tcl_plan(i, phase, bin_path, bin_hash):
     validate_identity(i)
     if phase not in phases(i):
         raise ValueError('phase does not match identity stage')
-    path = str(Path(bin_path).resolve())
+    path = Path(bin_path).resolve().as_posix()
     if not re.fullmatch(r'[A-Za-z0-9_./:-]+', path):
         raise ValueError('stage path must use letters/digits/_/./:/- only')
     token = confirmation({'identity': i, 'bin_sha256': bin_hash}, phase)

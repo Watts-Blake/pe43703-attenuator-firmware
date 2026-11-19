@@ -1,65 +1,15 @@
-"""Offline image inspection or explicit CH340 UART app update (POSIX hosts).
+"""Offline image inspection or explicit CH340 UART app update (Windows, macOS and Linux).
 
 Never opens a port on import or during inspect. Updates cannot replace loader.
 """
 import argparse
 import hashlib
-import os
 from pathlib import Path
-import select
-import termios
 import time
 from pack_image import validate_app
+from serial_port import Serial
 
 HELLO = b'boot 1 08002000 0000dc00 00000040\n'
-
-
-class Serial:
-    def __init__(self, port):
-        self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        try:
-            self.saved = termios.tcgetattr(self.fd)
-            attrs = termios.tcgetattr(self.fd)
-            attrs[0] = attrs[1] = attrs[3] = 0
-            attrs[2] = termios.CLOCAL | termios.CREAD | termios.CS8
-            attrs[4] = attrs[5] = termios.B115200
-            attrs[6][termios.VMIN] = attrs[6][termios.VTIME] = 0
-            termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
-            termios.tcflush(self.fd, termios.TCIOFLUSH)
-        except BaseException:
-            os.close(self.fd)
-            raise
-
-    def request(self, command, expected, seconds=5):
-        deadline = time.monotonic()+seconds
-        pending = command
-        while pending:
-            left = deadline-time.monotonic()
-            if left <= 0 or not select.select([], [self.fd], [], left)[1]:
-                raise TimeoutError('UART write timeout; stop without replay')
-            count = os.write(self.fd, pending)
-            if count <= 0:
-                raise RuntimeError('UART closed')
-            pending = pending[count:]
-        response = bytearray()
-        while not response.endswith(b'\n'):
-            left = deadline-time.monotonic()
-            if left <= 0 or not select.select([self.fd], [], [], left)[0]:
-                raise TimeoutError('UART reply timeout; completion unknown; stop without replay')
-            ch = os.read(self.fd, 1)
-            if not ch:
-                raise RuntimeError('UART disconnected')
-            response.extend(ch)
-            if len(response) > 64:
-                raise ValueError('oversized UART reply')
-        if bytes(response) != expected:
-            raise ValueError('unexpected UART reply: '+repr(bytes(response)))
-
-    def close(self):
-        try:
-            termios.tcsetattr(self.fd, termios.TCSANOW, self.saved)
-        finally:
-            os.close(self.fd)
 
 
 def update(link, app, entry):
