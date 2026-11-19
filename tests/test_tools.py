@@ -52,6 +52,8 @@ TCL_MODEL = r'''
 proc find {x} {global fixtures; return "$fixtures/$x"}
 set speed 0
 set deferred 0
+set examined 0
+set resets 0
 set selected {}
 set driver {}
 set hook {}
@@ -80,7 +82,7 @@ proc add_help_text {args} {}
 proc target {args} {}
 proc targets {name} {global selected; set selected $name}
 proc stm32f1x.cpu {op args} {
-    global hook deferred
+    global hook deferred examined resets bad
     if {$op eq "configure"} {
         if {[lsearch -exact $args -defer-examine] >= 0} {set deferred 1}
         set pos [lsearch -exact $args -event]
@@ -88,13 +90,18 @@ proc stm32f1x.cpu {op args} {
             set hook [lindex $args [expr {$pos+2}]]
         }
     }
-    if {$op eq "arp_examine"} {puts CORE_EXAMINE; uplevel #0 $hook}
+    if {$op eq "arp_examine"} {
+        if {$resets && $bad eq "reset-examine"} {error "post-reset examination failed"}
+        set examined 1
+        puts CORE_EXAMINE
+        uplevel #0 $hook
+    }
 }
 proc init {} {
-    global deferred hook speed selected initializations
+    global deferred hook speed selected initializations examined
     incr initializations
     puts "INIT speed=$speed target=$selected deferred=$deferred"
-    if {!$deferred} {puts IMPLICIT_CORE_EXAMINE; uplevel #0 $hook}
+    if {!$deferred} {set examined 1; puts IMPLICIT_CORE_EXAMINE; uplevel #0 $hook}
 }
 proc poll {args} {}
 proc gdb_port {args} {}
@@ -103,7 +110,17 @@ proc telnet_port {args} {}
 proc echo {s} {puts $s}
 proc sleep {ms} {}
 proc shutdown {} {puts FINISHED}
-proc reset {args} {puts "RESET $args"}
+proc reset {args} {
+    global examined deferred resets
+    incr resets
+    if {$deferred} {set examined 0}
+    puts "RESET $args"
+}
+proc halt {args} {
+    global examined
+    if {!$examined} {error "Target not examined yet"}
+    puts HALTED
+}
 proc verify_image {args} {global bad; if {$bad eq "verify"} {error "verify failed"}; puts VERIFY}
 proc stm32f1x {args} {error "unsafe unlock handler must never run"}
 for {set i 0} {$i < 32} {incr i} {set mem($i) 0}
@@ -124,10 +141,15 @@ set wrpr 0xffffffff
 set opt(0) 0x5aa5
 for {set i 1} {$i < 8} {incr i} {set opt($i) 0x00ff}
 proc read_memory {address width count} {
-    global mem image reads torn bad phase obr wrpr opt sr cr
+    global mem image reads torn bad phase obr wrpr opt sr cr selected examined resets
+    if {$selected eq "stm32f1x.cpu" && !$examined} {error "Target not examined yet"}
     if {$address >= 0x08000000 && $address < 0x08010000} {return $image([expr {$address}])}
     if {$address == 0xe0042004} {return 0}
-    if {$address == 0xe0042000} {puts IDCODE_READ; if {$bad eq "idcode"} {return 0}; return 0x20036410}
+    if {$address == 0xe0042000} {
+        puts IDCODE_READ
+        if {$bad eq "idcode" || ($resets && $bad eq "reset-idcode")} {return 0}
+        return 0x20036410
+    }
     if {$address == 0x1ffff7e8} {
         puts UID_READ
         if {$phase eq "remove-rdp"} {error "protected UID read forbidden"}
@@ -160,7 +182,8 @@ proc read_memory {address width count} {
     return $out
 }
 proc write_memory {address width words} {
-    global mem cr sr opt bad
+    global mem cr sr opt bad selected examined
+    if {$selected eq "stm32f1x.cpu" && !$examined} {error "Target not examined yet"}
     if {$address == 0xe0042004} {puts IMPLICIT_TARGET_WRITE; return}
     if {$address >= 0x40000000 && $address < 0x50000000} {
         puts [format "MMIO_WRITE %x" $address]
@@ -322,6 +345,34 @@ class Plans(unittest.TestCase):
             r=self.install(phase,confirm=False)
             self.assertNotEqual(r.returncode,0)
             self.assertNotIn('INIT',r.stdout)
+
+    def test_reset_deferral_regression_and_post_reset_guards(self):
+        for phase in ('remove-rdp','flash','verify','start'):
+            i=PROTECTED if phase=='remove-rdp' else IDENTITY
+            code=tcl_plan(i,phase,ELF.with_suffix('.bin'),'1'*64)
+            env={'PATH':os.environ.get('PATH',''),'PE43703_INSTALL_CONFIRMED':
+                 confirmation({'identity':i,'bin_sha256':'1'*64},phase)}
+            setup=f'set phase {phase}\nset obr {i["obr"]}'
+            # Execute the former lifecycle against a reset that invalidates
+            # examination. It must fail before FPEC/image operations.
+            old=code.replace('stm32f1x.cpu arp_examine\nhalt 1000\n','',1)
+            r=run_tcl(old,setup,env)
+            self.assertNotEqual(r.returncode,0)
+            self.assertIn('Target not examined yet',r.stderr)
+            self.assertNotIn('MMIO_WRITE',r.stdout)
+            self.assertNotIn('VERIFY',r.stdout)
+            r=self.install(phase)
+            self.assertEqual(r.returncode,0,r.stderr)
+            events=r.stdout.splitlines()
+            reset=events.index('RESET halt')
+            self.assertLess(events.index('IDCODE_READ'),events.index('CORE_EXAMINE'))
+            self.assertEqual(events[reset+1:reset+4],['CORE_EXAMINE','HALTED','IDCODE_READ'])
+            for bad in ('reset-examine','reset-idcode'):
+                r=self.install(phase,bad)
+                self.assertNotEqual(r.returncode,0,(phase,bad,r.stderr))
+                for forbidden in ('MMIO_WRITE','OPTION_ERASE_BEGIN','FLASH ','VERIFY',
+                                  'PE43703_PHASE_COMPLETE'):
+                    self.assertNotIn(forbidden,r.stdout)
 
     def test_fpec_partial_failure_never_claims_success_or_retries(self):
         for bad in ('busy','erase-fail','write-fail','write-transport'):

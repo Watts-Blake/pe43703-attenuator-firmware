@@ -162,6 +162,10 @@ def tcl_plan(i, phase, bin_path, bin_hash):
             code += '''targets stm32f1x.cpu
 stm32f1x.cpu arp_examine
 reset halt
+# Reset can clear examination while -defer-examine remains set. Explicitly
+# re-examine and halt before post-reset identity reads or any programming.
+stm32f1x.cpu arp_examine
+halt 1000
 ''' + chip_guard(i['idcode'], i['dpidr']) + option_guard(i)
             addresses = ' '.join(hex(a) for a in (*range(0x1ffff802, 0x1ffff810, 2), 0x1ffff800))
             code += f'set option_addresses {{{addresses}}}\n'
@@ -183,6 +187,9 @@ echo [format "POST_POR_UID=%08x%08x%08x" [lindex $uid 0] [lindex $uid 1] [lindex
 targets stm32f1x.cpu
 stm32f1x.cpu arp_examine
 reset halt
+# Initial attachment remains deferred; reset requires explicit examination too.
+stm32f1x.cpu arp_examine
+halt 1000
 ''' + guard
         if phase == 'flash':
             code += f'flash write_image erase {{{path}}} 0x08000000 bin\n'
