@@ -9,7 +9,7 @@ SECTIONS {
   .text : { *(.text*) *(.rodata*) . = ALIGN(4); } > FLASH
   .ARM.exidx : { *(.ARM.exidx*) } > FLASH
   .mailbox (NOLOAD) : { KEEP(*(.mailbox)) } > RAM
-  .data : { . = ALIGN(4); _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > RAM AT > FLASH
+  .data : { . = ALIGN(4); _sdata = .; *(.data*) *(.ramfunc*) . = ALIGN(4); _edata = .; } > RAM AT > FLASH
   _sidata = LOADADDR(.data);
   .bss (NOLOAD) : { . = ALIGN(4); _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > RAM
   /DISCARD/ : { *(.comment) *(.note*) }

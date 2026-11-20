@@ -4,7 +4,7 @@
 #include <string.h>
 typedef struct {
     uint32_t levels, word, bits, bytes, commands, data, begins, ends, us;
-    uint8_t ram[8][128];
+    uint8_t ram[8][132];
     uint32_t page, column;
     bool active;
 } Display;
@@ -20,7 +20,7 @@ static void pins(void *ctx,uint32_t high) {
             uint8_t value=(uint8_t)d->word;
             if (high&(1u<<5)) {
                 ++d->data;
-                if (d->page<8 && d->column<128) d->ram[d->page][d->column++]=value;
+                if (d->page<8 && d->column<132) d->ram[d->page][d->column++]=value;
             } else {
                 ++d->commands;
                 if (value>=0xb0 && value<=0xb7) d->page=value-0xb0u;
@@ -142,7 +142,7 @@ static void test_atomic_profile_set(void) {
     command(&u,&c,&probe,"get\n",now,"1.25\r\n"); assert(c.issued==5);
 }
 static void frame(Screen *s,Display *d,uint32_t now) {
-    for(uint32_t n=0;n<1200;++n) {
+    for(uint32_t n=0;n<2400;++n) {
         uint32_t before=d->us; screen_poll(s,now); assert(d->us-before<=25);
     }
     assert(s->phase==4 && !s->dirty);
@@ -150,7 +150,7 @@ static void frame(Screen *s,Display *d,uint32_t now) {
 static void test_display(void) {
     Display d={0}; Screen s; screen_init(&s,bus(&d));
     screen_show(&s,127,80,4,SOURCE_USB,true); frame(&s,&d,0);
-    assert(d.data==1024 && !strcmp(s.large,"31.75") && !strcmp(s.lines[6],"SOURCE USB") && !strcmp(s.lines[7],"USB LOCK"));
+    assert(d.data==2080 && !strcmp(s.large,"31.75") && !strcmp(s.lines[6],"SOURCE USB") && !strcmp(s.lines[7],"USB LOCK"));
     bool nonzero=false;
     for(uint32_t page=0;page<8;++page) for(uint32_t x=0;x<128;++x) {
         assert(d.ram[page][x]==screen_image(&s,x,page)); nonzero|=d.ram[page][x]!=0;
@@ -183,6 +183,100 @@ static void test_post_latch(void) {
     l.expected=100; l.source=SOURCE_LOCAL; assert(controller_set(&c,0)); assert(!c.qdb && c.source==SOURCE_USB);
 }
 static uint32_t unavailable_adc(void *ctx,uint32_t address) { (void)ctx;(void)address;return 0; }
+typedef struct { uint8_t bytes[1024]; uint32_t writes; bool fail; } ConfigMemory;
+static uint8_t config_read(void *ctx,uint32_t a) {
+    ConfigMemory *m=ctx; assert(a>=CONFIG_BASE && a<FLASH_END); return m->bytes[a-META_BASE];
+}
+static bool config_write(void *ctx,uint32_t a,uint16_t v) {
+    ConfigMemory *m=ctx;assert(a>=CONFIG_BASE && a<=FLASH_END-2u);++m->writes;
+    if(m->fail)return false;
+    m->bytes[a-META_BASE]=(uint8_t)v;m->bytes[a-META_BASE+1u]=(uint8_t)(v>>8);return true;
+}
+static void test_identification(void) {
+    Display d={0};Controller c;controller_boot(&c,rf());Ui u;ui_init(&u,&c,bus(&d));
+    Oled probe;oled_init(&probe,bus(&d));ConfigMemory m={0};memset(m.bytes,255,sizeof(m.bytes));
+    ConfigIo io={config_read,config_write,&m};ui_configure(&u,io);
+    AdcIo adc={unavailable_adc,no_write,quiet,0};char out[16];uint32_t now=UINT32_MAX-500u;
+    command(&u,&c,&probe,"display\n",now,"display 1\r\n");
+    command(&u,&c,&probe,"display get\n",now,"config 41 62\r\n");
+    command(&u,&c,&probe,"display start\n",now,"ok display\r\n");
+    command(&u,&c,&probe,"display status\n",now,"trial 41 W\r\n");
+    frame(&u.screen,&d,now);
+    command(&u,&c,&probe,"display status\n",now,"trial 41 R\r\n");
+    command(&u,&c,&probe,"display start\n",now,"err busy\r\n");
+    assert(u.identification.active && !m.writes);
+    command(&u,&c,&probe,"display next\n",now,"ok next\r\n");
+    assert(u.screen.index==89);frame(&u.screen,&d,now);
+    command(&u,&c,&probe,"display status\n",now,"trial 89 R\r\n");
+    command(&u,&c,&probe,"display save 89\n",now,"ok saving\r\n");
+    assert(!m.writes); /* dispatch does not write */
+    for(uint32_t i=0;i<8;++i) {
+        uint32_t before=m.writes;
+        (void)ui_poll(&u,&c,&adc,&probe,now,0,out,false);assert(m.writes==before+1u);
+    }
+    command(&u,&c,&probe,"display status\n",now,"saved 89\r\n");
+    command(&u,&c,&probe,"display get\n",now,"config 89 61\r\n");
+    assert(!u.identification.active && !u.screen.identifying && u.screen.index==89 && c.issued==1);
+    /* Legacy fixed test still reports completion after restoring a nondefault config. */
+    command(&u,&c,&probe,"oledtest\n",now,"ok oledtest\r\n");frame(&u.screen,&d,now);
+    assert(u.screen.index==41);
+    (void)ui_poll(&u,&c,&adc,&probe,now+12000u,0,out,false);
+    assert(u.screen.index==89 && u.screen.done);
+    assert(ui_poll(&u,&c,&adc,&probe,now+12001u,0,out,true)==15);
+    assert(!strcmp(out,"oledtest done\r\n"));
+    /* Cancel and malformed/error lines keep the existing configuration. */
+    const char *errors[]={"display cancel\n","display finish\n","display try 96\n","set 32\n"};
+    const char *answers[]={"ok cancel\r\n","ok finish\r\n","err display\r\n","err\r\n"};
+    for(uint32_t i=0;i<4;++i) {
+        command(&u,&c,&probe,"display start\n",now,"ok display\r\n");
+        command(&u,&c,&probe,errors[i],now,answers[i]);
+        assert(!u.identification.active && u.screen.index==89 && m.writes==8 && c.issued==1);
+    }
+    /* RX error / overlong input abandon the session and require release. */
+    for(uint32_t error=0;error<2;++error) {
+        command(&u,&c,&probe,"display start\n",now,"ok display\r\n");
+        hold(&u,&c,0,&now,80);assert(u.armed);
+        Line line={0};const char *bad="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+        if(error) (void)ui_console_feed(&u,&line,&c,&adc,&probe,now,'x',true,out);
+        else while(*bad)(void)ui_console_feed(&u,&line,&c,&adc,&probe,now,*bad++,false,out);
+        assert(!u.identification.active && !u.armed && u.screen.index==89);
+    }
+    /* Explicit SET and profile acquire cancel; no extra RF transaction. */
+    command(&u,&c,&probe,"display start\n",now,"ok display\r\n");
+    command(&u,&c,&probe,"set 1\n",now,"ok 1.00\r\n");assert(c.issued==2 && !u.identification.active);
+    command(&u,&c,&probe,"display start\n",now,"ok display\r\n");
+    command(&u,&c,&probe,"profile 1234abcd\n",now,"ok profile\r\n");assert(!u.identification.active);
+    command(&u,&c,&probe,"display start\n",now,"err busy\r\n");assert(u.locked && c.issued==2);
+    command(&u,&c,&probe,"profile set 1234abcd 2\n",now,"ok 2.00\r\n");
+    command(&u,&c,&probe,"profile end 1234abcd\n",now,"ok end\r\n");
+    /* Any released/debounced key advances only; no local pending or SET. */
+    command(&u,&c,&probe,"display start\n",now,"ok display\r\n");frame(&u.screen,&d,now);
+    uint32_t pending=u.pending,issued=c.issued;
+    press(&u,&c,1352,&now);assert(u.identification.trial==89 && c.issued==issued && u.pending==pending);
+    frame(&u.screen,&d,now);hold(&u,&c,1352,&now,1000);assert(u.identification.trial==89);
+    /* GET/status do not extend the inactivity or total deadlines. */
+    ui_expire(&u,&c,now+DISPLAY_IDLE_MS);assert(!u.identification.active && !u.armed && c.issued==issued);
+    command(&u,&c,&probe,"display status\n",now+DISPLAY_IDLE_MS,"err timeout\r\n");
+    now=0;command(&u,&c,&probe,"display start\n",now,"ok display\r\n");
+    for(uint32_t n=1;n<6;++n) {
+        frame(&u.screen,&d,now);now=n*100000u;
+        command(&u,&c,&probe,"display next\n",now,"ok next\r\n");
+    }
+    (void)ui_poll(&u,&c,&adc,&probe,DISPLAY_SESSION_MS,0,out,false);
+    assert(!u.identification.active && u.screen.index==89 && m.writes==8);
+    /* Cancellation before the final halfword leaves the prior record valid. */
+    now=0;command(&u,&c,&probe,"display start\n",now,"ok display\r\n");frame(&u.screen,&d,now);
+    command(&u,&c,&probe,"display save 41\n",now,"ok saving\r\n");
+    for(uint32_t i=0;i<7;++i)(void)ui_poll(&u,&c,&adc,&probe,now,0,out,false);
+    command(&u,&c,&probe,"display cancel\n",now,"ok cancel\r\n");
+    DisplayConfig reboot;config_init(&reboot,io);assert(reboot.index==89);
+    /* Store error ends the session with the saved mapping intact. */
+    m.fail=true;command(&u,&c,&probe,"display start\n",now,"ok display\r\n");frame(&u.screen,&d,now);
+    command(&u,&c,&probe,"display save 41\n",now,"ok saving\r\n");
+    (void)ui_poll(&u,&c,&adc,&probe,now,0,out,false);
+    command(&u,&c,&probe,"display status\n",now,"err save\r\n");assert(u.screen.index==89);
+    assert(c.issued==issued);
+}
 static void test_console_and_scheduling(void) {
     Display d={0}; Controller c; controller_boot(&c,rf()); Ui u; ui_init(&u,&c,bus(&d));
     Oled probe; oled_init(&probe,bus(&d));
@@ -219,7 +313,7 @@ static void test_console_and_scheduling(void) {
     oled_cancel(&probe); frame(&u.screen,&d,0); assert(d.active);
 }
 int main(void) {
-    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();
+    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();test_identification();
     puts("UI: guarded ladder, median/debounce/release, clamping, post-latch state, leases/wrap, fixed OLED bytes and bounded alignment passed");
     return 0;
 }

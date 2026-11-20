@@ -60,6 +60,12 @@ Automatic PA1 conversions use a nonblocking register state machine: one phase pe
 
 Normal rendering sends at most one byte per loop (25 µs explicit delay), or one reset transition (20 µs), with no framebuffer or hold busy wait. A dirty applied-state frame restarts from the top, keeping APPLIED first. The legacy role sweep temporarily owns the OLED and suppresses local actions; completion/cancellation restores normal rendering. `oledtest` temporarily shows a labeled, fixed-column alignment pattern, suppresses buttons and restores the screen after a 10-second visible hold or a 12-second hard deadline. Valid SET cancels either diagnostic and applies normally. Deadline cleanup does not depend on UART output space. See [OLED commands and hardware limits](oled-probe.md).
 
+### Display identification and saved geometry (v0.3.0)
+
+The factory screen remains SSD1306-compatible column zero on PA6/PA7/PA5/PA4. Explicit `display` sessions hold S/H alignment patterns, optionally reuse all 96 OLED role indices, and persist only an explicitly confirmed compatible trial. New sessions reject active USB profiles; acquiring a profile or applying an external value cancels identification without an extra RF transaction. Cancel/error/deadlines restore the saved mapping. Button presses during identification only advance and require release before local editing resumes. See [protocol, deadlines, journal validation and unchanged flash geometry](display-identification.md). No button calibration or silicon auto-identification is implemented.
+
+The journal uses unused metadata-page bytes rather than app pages. Runtime code has no erase callback. Updater erase behavior and the full 55 KiB app capacity stay unchanged; app updates reset display configuration. The program wait executes from copied RAM, with one verified halfword per poll and a fault latch that blocks further writes. New hardware behavior, flash timing and interrupted-power recovery are UNRUN; see [qualification plan](display-qualification.md).
+
 ## Destructive installation semantics
 
 [ST PM0075 Rev 2 §2.4.1](https://www.st.com/resource/en/programming_manual/cd00283419-stm32f10xxx-flash-memory-microcontrollers-stmicroelectronics.pdf) specifies mass erase when changing F1 RDP to unprotected and power-on reset afterward. [OpenOCD's STM32F1 flash commands](https://openocd.org/doc/html/Flash-Commands.html) document `stm32f1x unlock 0` as destructive on a protected unit. The tooling does not attempt protection bypass, readout exploits or recovery of protected stock code.

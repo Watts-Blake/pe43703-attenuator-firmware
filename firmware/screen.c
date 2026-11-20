@@ -33,6 +33,7 @@ static void value(char *out, const char *label, uint32_t qdb) {
 void screen_init(Screen *s, OledBus bus) {
     oled_init(&s->wire,bus); s->phase=0; s->cursor=0;
     s->dirty=true; s->testing=false; s->holding=false; s->done=false;
+    s->identifying=false; s->index=41;
     for (uint32_t i=0;i<8;++i) text(s->lines[i],"");
     format_db(0,s->large);
 }
@@ -47,25 +48,38 @@ void screen_suspend(Screen *s) {
     oled_cancel(&s->wire); s->phase=0; s->dirty=true;
 }
 void screen_test(Screen *s, uint32_t now_ms) {
+    if (s->index!=41) screen_config(s,41); /* legacy factory-mapping diagnostic */
     s->testing=true; s->holding=false; s->done=false;
     s->test_start=now_ms; s->dirty=true;
+}
+void screen_config(Screen *s, uint32_t index) {
+    screen_suspend(s); s->index=index<96 ? index : 41;
+    s->identifying=false; s->testing=false; s->holding=false; s->done=false;
+}
+void screen_identify(Screen *s, uint32_t index) {
+    screen_config(s,index); s->identifying=true;
 }
 void screen_stop_test(Screen *s) {
     if (s->testing) { s->testing=false; s->holding=false; s->dirty=true; s->done=false; }
 }
 uint8_t screen_image(const Screen *s, uint32_t x, uint32_t page) {
     if (x>=128 || page>=8) return 0;
-    if (s->testing) {
+    if (s->testing || s->identifying) {
         uint8_t bits=0;
         for (uint32_t b=0;b<8;++b) {
             uint32_t y=page*8u+b;
-            bool on=x<=2 || x>=125 || y==0 || y==63;
+            bool on=x==0 || x==127 || y==0 || y==63;
+            /* Distinct inner edge columns must not hide a clipped outer border. */
+            if (((x==1 || x==2) && y>=8 && y<16) ||
+                ((x==125 || x==126) && y>=48 && y<56)) on=true;
             /* Asymmetric left/right markers and a labeled page number. */
             if ((x==8 && y>=8 && y<24) || (y==24 && x>=8 && x<20)) on=true;
             if ((x==119 && y>=40 && y<56) || (y==40 && x>=108 && x<120)) on=true;
             if (on) bits|=(uint8_t)(1u<<b);
         }
-        if (x>=32 && x<74 && page==3) bits|=glyph("SSD1306"[(x-32u)/6u],(x-32u)%6u);
+        if (x>=32 && x<74 && page==3) bits|=glyph((s->index<48 ? "SSD1306" : "SH1106 ")[(x-32u)/6u],(x-32u)%6u);
+        if (s->identifying && x>=50 && x<62 && page==5)
+            bits|=glyph((char)('0'+((x-50u)/6u ? s->index%10u : s->index/10u)),(x-50u)%6u);
         if (x>=24 && x<29) bits|=glyph((char)('0'+page),x-24u);
         return bits;
     }
@@ -86,16 +100,27 @@ void screen_poll(Screen *s, uint32_t now_ms) {
         (s->holding && (uint32_t)(now_ms-s->hold_start)>=10000u))) {
         screen_stop_test(s); s->done=true;
     }
-    if (!s->wire.configured) { oled_fixed_begin(&s->wire); s->phase=1; s->cursor=0; return; }
+    if (!s->wire.configured) { oled_config_begin(&s->wire,s->index); s->phase=1; s->cursor=0; return; }
     if (s->phase==1) {
-        if (oled_fixed_init(&s->wire,s->cursor++)) { s->phase=2; s->cursor=0; }
+        if (oled_config_init(&s->wire,s->cursor++)) { s->phase=5; s->cursor=0; }
+        return;
+    }
+    if (s->phase==5) {
+        /* Clear all 132 possible RAM columns, so a prior trial cannot supply
+           a missing edge. SSD1306 wraps the four extra zero bytes harmlessly. */
+        uint32_t page=s->cursor/135u, col=s->cursor%135u;
+        if (col==0) oled_write(&s->wire,(uint8_t)(0xb0u+page),false);
+        else if (col==1) oled_write(&s->wire,0,false);
+        else if (col==2) oled_write(&s->wire,0x10,false);
+        else oled_write(&s->wire,0,true);
+        if (++s->cursor==1080) { s->phase=2; s->cursor=0; }
         return;
     }
     if (s->dirty) { s->phase=2; s->cursor=0; s->dirty=false; }
     if (s->phase==2) {
         uint32_t page=s->cursor/131u, col=s->cursor%131u;
         if (col==0) oled_write(&s->wire,(uint8_t)(0xb0u+page),false);
-        else if (col==1) oled_write(&s->wire,0,false);
+        else if (col==1) oled_write(&s->wire,s->index<48 ? 0 : 2,false);
         else if (col==2) oled_write(&s->wire,0x10,false);
         else oled_write(&s->wire,screen_image(s,col-3u,page),true);
         if (++s->cursor==1048) s->phase=3;

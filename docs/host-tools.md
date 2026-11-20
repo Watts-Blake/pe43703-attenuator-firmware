@@ -1,6 +1,6 @@
 # Windows, macOS and Linux host tools
 
-`tools/attenuator.py` provides single-port set/get and `tools/usb_update.py` provides app-only updates using [pyserial](https://pyserial.readthedocs.io/en/latest/pyserial_api.html). They require Python 3.10+ and pyserial 3.5. Firmware builds still require the separate toolchain in the README. Import, `--help` and image inspection do not open ports; inspection does not require pyserial.
+`tools/display_identify.py` provides [guided OLED alignment and explicitly confirmed configuration](display-identification.md), `tools/attenuator.py` provides single-port set/get and `tools/usb_update.py` provides app-only updates using [pyserial](https://pyserial.readthedocs.io/en/latest/pyserial_api.html). They require Python 3.10+ and pyserial 3.5. Firmware builds still require the separate toolchain in the README. Import, `--help` and image inspection do not open ports; inspection does not require pyserial.
 
 ## Install and identify the port
 
@@ -43,7 +43,7 @@ python tools/attenuator.py set --port /dev/ttyUSB0 0
 
 A failed acknowledgment, malformed/oversized response, disconnect or timeout exits unsuccessfully. Completion may be unknown; there is no automatic replay or zero cleanup. Inspect the connection and application state before another deliberate operation. This minimal CLI leaves the requested setting applied. For Linux timed profiles and bounded zero cleanup, use [attctl](attctl.md).
 
-On Linux, both portable tools take the same `/run/lock/attctl.lock` as attctl **before opening/configuring a port**, retaining it through close. A busy or inaccessible lock fails closed; do not delete it or override permissions to bypass another controller. This global lock also serializes operations on different ports. The installed Linux attctl and its stronger topology, `/proc` holder checks, output bounds and cleanup remain unchanged. On POSIX, pyserial also requests a cooperative exclusive port lock; Windows uses pyserial's native exclusive open. POSIX locks do not exclude arbitrary terminal programs that ignore them. Close all other port users; macOS provides no attctl topology or Linux process-holder guarantee. Driver behavior may briefly toggle modem-control lines at open even though the tools request DTR/RTS inactive.
+On Linux, these portable tools take the same `/run/lock/attctl.lock` as attctl **before opening/configuring a port**, retaining it through close. A busy or inaccessible lock fails closed; do not delete it or override permissions to bypass another controller. This global lock also serializes operations on different ports. The installed Linux attctl and its stronger topology, `/proc` holder checks, output bounds and cleanup remain unchanged. On POSIX, pyserial also requests a cooperative exclusive port lock; Windows uses pyserial's native exclusive open. POSIX locks do not exclude arbitrary terminal programs that ignore them. Close all other port users; macOS provides no attctl topology or Linux process-holder guarantee. Driver behavior may briefly toggle modem-control lines at open even though the tools request DTR/RTS inactive.
 
 For app-only updates, follow [USB update/recovery](usb-update.md), including exact image-hash confirmation. USB updates cannot install the initial loader.
 

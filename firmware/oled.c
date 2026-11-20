@@ -43,15 +43,28 @@ static void byte(Oled *p, uint8_t value, bool data) {
 }
 void oled_write(Oled *p, uint8_t value, bool data) { byte(p,value,data); }
 void oled_fixed_begin(Oled *p) {
-    p->index=41; p->clk=1u<<6; p->si=1u<<7; p->dc=1u<<5; p->control=1u<<4;
-    p->bus.begin(p->bus.context,0); p->configured=true;
-    p->bus.delay_us(p->bus.context,10); levels(p,p->control);
-    p->bus.delay_us(p->bus.context,10);
+    oled_config_begin(p,41);
 }
 bool oled_fixed_init(Oled *p, uint32_t cursor) {
-    if (cursor>=sizeof(ssd_init)) return true;
-    byte(p,ssd_init[cursor],false);
-    return cursor+1u==sizeof(ssd_init);
+    return oled_config_init(p,cursor);
+}
+void oled_config_begin(Oled *p, uint32_t index) {
+    uint8_t pins[4];
+    if (!oled_mapping(index,pins)) { index=41; (void)oled_mapping(index,pins); }
+    p->index=index; p->clk=1u<<pins[0]; p->si=1u<<pins[1];
+    p->dc=1u<<pins[2]; p->control=1u<<pins[3];
+    p->bus.begin(p->bus.context,reset_mode(p) ? 0 : p->control); p->configured=true;
+    if (reset_mode(p)) {
+        p->bus.delay_us(p->bus.context,10); levels(p,p->control);
+        p->bus.delay_us(p->bus.context,10);
+    }
+}
+bool oled_config_init(Oled *p, uint32_t cursor) {
+    const uint8_t *init=p->index<48 ? ssd_init : sh_init;
+    uint32_t length=p->index<48 ? sizeof(ssd_init) : sizeof(sh_init);
+    if (cursor>=length) return true;
+    byte(p,init[cursor],false);
+    return cursor+1u==length;
 }
 void oled_init(Oled *p, OledBus bus) {
     p->bus=bus; p->active=false; p->configured=false; p->index=0;
