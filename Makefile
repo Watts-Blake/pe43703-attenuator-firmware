@@ -36,7 +36,7 @@ build/test_ui: tests/test_ui.c firmware/ui.c firmware/screen.c firmware/oled.c f
 	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_ui.c firmware/ui.c firmware/screen.c firmware/oled.c firmware/adc.c firmware/core.c firmware/display_id.c firmware/display_config.c firmware/button_cal.c -o $@
 build/test_display_config: tests/test_display_config.c firmware/display_config.c firmware/boot_core.c firmware/boot_core.h firmware/display_config.h firmware/button_cal.h firmware/core.h firmware/layout.h | build
 	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_display_config.c firmware/display_config.c firmware/boot_core.c -o $@
-test: all build/test_button_cal build/test_display_config build/test_core build/test_boot build/test_adc build/test_oled build/test_ui
+test: all build/test_screen build/test_button_cal build/test_display_config build/test_core build/test_boot build/test_adc build/test_oled build/test_ui
 	./build/test_display_config
 	./build/test_boot
 	./build/test_core
@@ -44,6 +44,7 @@ test: all build/test_button_cal build/test_display_config build/test_core build/
 	./build/test_oled
 	./build/test_ui
 	./build/test_button_cal
+	./build/test_screen
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py' -v
 inspect: all
 	$(PYTHON) tools/inspect_image.py build/attenuator.elf
@@ -57,3 +58,6 @@ clean:
 
 build/test_button_cal: tests/test_button_cal.c $(APP_HEADERS) firmware/button_cal.c firmware/display_config.c firmware/screen.c firmware/oled.c firmware/adc.c firmware/core.c | build
 	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_button_cal.c firmware/button_cal.c firmware/display_config.c firmware/screen.c firmware/oled.c firmware/adc.c firmware/core.c -o $@
+
+build/test_screen: tests/test_screen.c firmware/screen.c firmware/screen.h firmware/oled.c firmware/oled.h firmware/adc.c firmware/adc.h firmware/core.c firmware/core.h firmware/version.h | build
+	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_screen.c firmware/screen.c firmware/oled.c firmware/adc.c firmware/core.c -o $@

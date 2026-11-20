@@ -27,6 +27,10 @@ static void reset_buttons(Ui *u) {
     u->used=0; u->next=0; u->candidate=KEY_UNKNOWN; u->candidate_at=0;
     u->stable=KEY_UNKNOWN; u->last_sample=0; u->armed=false;
 }
+static void cancel_label(Ui *u) {
+    if (u->label_saving) config_cancel(&u->identification.config);
+    u->label_saving=false; u->label_saved=false; u->label_failed=false;
+}
 static void cancel_calibration(Ui *u) {
     if (u->calibration.active) u->dirty=true;
     button_cal_cancel(&u->calibration,&u->identification.config,&u->screen);
@@ -37,13 +41,18 @@ void ui_init(Ui *u, Controller *c, OledBus bus) {
     button_cal_init(&u->calibration);
     u->pending=c->qdb; u->step_index=0; u->seen=c->issued;
     u->locked=false; u->token=0; u->lease_at=0; u->sample_at_us=0;
+    u->feedback=false; u->feedback_at=0;
+    u->seen_known=c->applied_known; u->seen_error=c->latch_error;
+    u->label_saving=false; u->label_saved=false; u->label_failed=false;
     reset_buttons(u); u->dirty=true;
 }
-void ui_configure(Ui *u, ConfigIo io) { display_id_init(&u->identification,&u->screen,io); }
+void ui_configure(Ui *u, ConfigIo io) { display_id_init(&u->identification,&u->screen,io); u->dirty=true; }
 void ui_sync(Ui *u, Controller *c) {
+    if (u->seen_known!=c->applied_known || u->seen_error!=c->latch_error) u->dirty=true;
+    u->seen_known=c->applied_known; u->seen_error=c->latch_error;
     if (u->seen==c->issued) return;
     u->seen=c->issued; u->pending=c->qdb; reset_buttons(u);
-    cancel_calibration(u);
+    cancel_label(u); cancel_calibration(u);
     display_id_cancel(&u->identification,&u->screen);
     screen_stop_test(&u->screen); u->dirty=true;
     if (u->screen.index!=u->identification.config.index)
@@ -56,8 +65,11 @@ void ui_expire(Ui *u, Controller *c, uint32_t now_ms) {
     button_cal_expire(&u->calibration,&u->identification.config,&u->screen,now_ms);
     if (calibrating && !u->calibration.active) { reset_buttons(u); u->dirty=true; }
     if (identifying && !u->identification.active) reset_buttons(u);
+    if (u->feedback && (uint32_t)(now_ms-u->feedback_at)>=LOCK_FEEDBACK_MS) {
+        u->feedback=false; u->dirty=true;
+    }
     if (u->locked && (uint32_t)(now_ms-u->lease_at)>=PROFILE_LEASE_MS) {
-        u->locked=false; u->token=0; u->pending=c->qdb; reset_buttons(u); u->dirty=true;
+        u->locked=false; u->feedback=false; u->token=0; u->pending=c->qdb; reset_buttons(u); u->dirty=true;
     }
 }
 uint32_t button_code(uint32_t raw) {
@@ -75,7 +87,7 @@ void ui_button_sample(Ui *u, Controller *c, uint32_t raw, uint32_t now_ms) {
         button_cal_sample(&u->calibration,&u->identification.config,&u->screen,raw,now_ms);
         reset_buttons(u); u->dirty=true; return;
     }
-    if (u->locked || u->screen.testing || u->identification.saving) { reset_buttons(u); return; }
+    if (u->screen.testing || u->identification.saving || u->label_saving) { reset_buttons(u); return; }
     if (u->used && (uint32_t)(now_ms-u->last_sample)>20u) reset_buttons(u);
     u->last_sample=now_ms;
     u->samples[u->next]=raw; u->next=(u->next+1u)%5u;
@@ -95,6 +107,9 @@ void ui_button_sample(Ui *u, Controller *c, uint32_t raw, uint32_t now_ms) {
     if (key==KEY_RELEASED) { u->armed=true; return; }
     if (!u->armed) return;
     u->armed=false;
+    if (u->locked) {
+        u->feedback=true; u->feedback_at=now_ms; u->dirty=true; return;
+    }
     if (u->identification.active) {
         display_id_next(&u->identification,&u->screen,now_ms); return;
     }
@@ -109,14 +124,42 @@ void ui_button_sample(Ui *u, Controller *c, uint32_t raw, uint32_t now_ms) {
 size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
                        Oled *probe, uint32_t now_ms, char ch, bool rx_error, char out[16]) {
     ui_expire(u,c,now_ms); ui_sync(u,c);
-    if (rx_error) { cancel_calibration(u); display_id_cancel(&u->identification,&u->screen); reset_buttons(u); }
+    if (rx_error) { cancel_label(u); cancel_calibration(u); display_id_cancel(&u->identification,&u->screen); reset_buttons(u); }
     if ((ch=='\r' || ch=='\n') && line->used && !line->discard && !rx_error) {
         line->data[line->used]=0; const char *s=line->data; uint32_t token, qdb;
         const char *value=token_prefix(s,"profile set ",&token);
         const char *answer=0;
+        DisplayConfig *config=&u->identification.config;
+        if (equal(s,"label") || (s[0]=='l' && s[1]=='a' && s[2]=='b' && s[3]=='e' && s[4]=='l' && s[5]==' ')) {
+            const char *answer="err label\r\n";
+            if (equal(s,"label")) answer="label 1\r\n";
+            else if (equal(s,"label get")) {
+                size_t n=reply(out,"label A 00\r\n"); out[6]=config->label;
+                uint32_t left=config_remaining(config);
+                out[8]=(char)('0'+left/10u); out[9]=(char)('0'+left%10u);
+                line->used=0; return n;
+            } else if (equal(s,"label status")) {
+                if (u->label_saving) answer="saving\r\n";
+                else if (u->label_failed) answer="err save\r\n";
+                else if (u->label_saved) {
+                    size_t n=reply(out,"saved A\r\n"); out[6]=config->label;
+                    line->used=0; return n;
+                } else answer="idle\r\n";
+            } else if (equal(s,"label cancel")) { cancel_label(u); answer="ok cancel\r\n"; }
+            else if (equal(s,"label save A") || equal(s,"label save B")) {
+                if (u->locked || probe->active || u->screen.testing ||
+                    u->identification.active || u->calibration.active || u->label_saving) answer="err busy\r\n";
+                else if (!config_save_label(config,s[11])) answer="err save\r\n";
+                else {
+                    u->label_saving=config->writing; u->label_saved=!config->writing;
+                    u->label_failed=false; reset_buttons(u); answer="ok saving\r\n";
+                }
+            }
+            line->used=0; return reply(out,answer);
+        }
         bool was_calibrating=u->calibration.active;
         size_t bn=button_cal_command(&u->calibration,&u->identification.config,&u->screen,s,now_ms,
-            u->locked || probe->active || u->screen.testing || u->identification.active,out);
+            u->locked || probe->active || u->screen.testing || u->identification.active || u->label_saving,out);
         if (bn) {
             line->used=0;
             if (was_calibrating && !u->calibration.active) { reset_buttons(u); u->dirty=true; }
@@ -124,7 +167,7 @@ size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
             return bn;
         }
         size_t dn=display_id_command(&u->identification,&u->screen,s,now_ms,
-            u->locked || probe->active || u->screen.testing || u->calibration.active,out);
+            u->locked || probe->active || u->screen.testing || u->calibration.active || u->label_saving,out);
         if (dn) { line->used=0; reset_buttons(u); return dn; }
         if (equal(s,"profile")) answer="profile 2\r\n";
         else if (value && *value==' ' && parse_db(value+1,&qdb)) {
@@ -141,9 +184,9 @@ size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
         else if (token_after(s,"profile ",&token)) {
             if (u->locked) answer="err busy\r\n";
             else {
-                cancel_calibration(u);
+                cancel_label(u); cancel_calibration(u);
                 display_id_cancel(&u->identification,&u->screen);
-                u->locked=true; u->token=token; u->lease_at=now_ms;
+                u->locked=true; u->feedback=false; u->token=token; u->lease_at=now_ms;
                 u->pending=c->qdb; reset_buttons(u); u->dirty=true; answer="ok profile\r\n";
             }
         } else if (token_after(s,"profile keep ",&token)) {
@@ -152,27 +195,27 @@ size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
         } else if (token_after(s,"profile end ",&token)) {
             if (!u->locked || u->token!=token) answer="err lock\r\n";
             else {
-                u->locked=false; u->token=0; u->pending=c->qdb; reset_buttons(u);
+                u->locked=false; u->feedback=false; u->token=0; u->pending=c->qdb; reset_buttons(u);
                 u->dirty=true; answer="ok end\r\n";
             }
         } else if (equal(s,"oledtest")) {
-            if (probe->active || u->screen.testing || u->identification.active || u->calibration.active) answer="err busy\r\n";
+            if (probe->active || u->screen.testing || u->identification.active || u->calibration.active || u->label_saving) answer="err busy\r\n";
             else { reset_buttons(u); screen_test(&u->screen,now_ms); answer="ok oledtest\r\n"; }
         }
         if (answer) { line->used=0; return reply(out,answer); }
         /* Raw diagnostics serialize with the automatic ADC sampler. */
         if (equal(s,"adc") || equal(s,"diag adc") || equal(s,"bootloader")) {
-            cancel_calibration(u); reset_buttons(u); adc_cancel(&u->sampler,adc);
+            cancel_label(u); cancel_calibration(u); reset_buttons(u); adc_cancel(&u->sampler,adc);
         }
         if (equal(s,"oledprobe")) {
-            cancel_calibration(u);
+            cancel_label(u); cancel_calibration(u);
             display_id_cancel(&u->identification,&u->screen);
             screen_stop_test(&u->screen); screen_suspend(&u->screen); reset_buttons(u);
         }
     }
     size_t n=probe_console_feed(line,c,adc,probe,now_ms,ch,rx_error,out);
     if (line->discard || (n>=3 && out[0]=='e' && out[1]=='r' && out[2]=='r')) {
-        cancel_calibration(u);
+        cancel_label(u); cancel_calibration(u);
         if (u->identification.active) reset_buttons(u);
         display_id_cancel(&u->identification,&u->screen);
     }
@@ -184,6 +227,13 @@ size_t ui_poll(Ui *u, Controller *c, const AdcIo *adc, Oled *probe,
                uint32_t now_ms, uint32_t now_us, char out[16], bool can_report) {
     ui_expire(u,c,now_ms); ui_sync(u,c);
     if (probe->active) { adc_cancel(&u->sampler,adc); reset_buttons(u); return 0; }
+    if (u->label_saving) {
+        config_poll(&u->identification.config);
+        if (!u->identification.config.writing) {
+            u->label_saving=false; u->label_failed=u->identification.config.fault;
+            u->label_saved=!u->label_failed; u->dirty=true;
+        }
+    }
     bool identifying=u->identification.active;
     bool calibrating=u->calibration.active;
     if (calibrating && u->calibration.phase==CAL_SAVING) adc_cancel(&u->sampler,adc);
@@ -211,7 +261,9 @@ size_t ui_poll(Ui *u, Controller *c, const AdcIo *adc, Oled *probe,
         }
     }
     if (u->dirty && !u->calibration.active) {
-        screen_show(&u->screen,c->qdb,u->pending,steps[u->step_index],c->source,u->locked);
+        ScreenState state={c->qdb,u->pending,steps[u->step_index],c->source,
+            c->applied_known,c->latch_error,u->locked,u->feedback,u->identification.config.label};
+        screen_show(&u->screen,&state);
         u->dirty=false;
     }
     screen_poll(&u->screen,now_ms);

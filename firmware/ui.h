@@ -3,6 +3,7 @@
 #include "display_id.h"
 #include "button_cal.h"
 #define PROFILE_LEASE_MS 10000u
+#define LOCK_FEEDBACK_MS 1500u
 typedef struct {
     Screen screen;
     DisplayId identification;
@@ -10,7 +11,9 @@ typedef struct {
     AdcAsync sampler;
     uint32_t pending, step_index, seen, token, lease_at, sample_at_us;
     uint32_t samples[5], used, next, candidate, candidate_at, stable, last_sample;
-    bool locked, armed, dirty;
+    uint32_t feedback_at;
+    bool locked, armed, dirty, feedback, seen_known, seen_error;
+    bool label_saving, label_saved, label_failed;
 } Ui;
 void ui_init(Ui *u, Controller *c, OledBus bus);
 void ui_configure(Ui *u, ConfigIo io);

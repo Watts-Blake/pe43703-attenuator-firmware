@@ -10,6 +10,63 @@ One examined unit successfully updated from v0.1.0 to the 4,736-byte v0.1.1 app 
 
 These observations do not establish RF accuracy, electrical continuity/timing, calibrated ADC thresholds, other-board compatibility or normal display/button support. The [applied-state display and profile-precedence implementation](design.md#applied-state-display-and-local-control) has the separate offline validation below. No new hardware operation accompanies this candidate.
 
+## v0.5.0 Stacked Hero screen — offline candidate
+
+`make -B all test inspect` passes with Arm GCC 14.2.1: eight C executables
+and 112 Python methods, including production C rendering and actual
+console/button/profile/mailbox transitions. All eight C suites also pass
+AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled.
+The five main screenshots and eight edge panels match the approved PNGs
+pixel for pixel; 1×/4× firmware outputs were visually inspected. The
+[screenshot manifest](images/screen/SHA256SUMS) binds the checked images.
+See [screen semantics, coordinates, label protocol and limits](screen.md).
+**Physical behavior is UNRUN.** No device access, flash or RF measurement
+accompanies this candidate.
+
+| Artifact | Bytes | SHA256 |
+| --- | --- | --- |
+| App BIN | 16,732 | `8f7eda7e17a4edcf6c9cbc4ab28874949a157503ae29e69eb410159299298eb5` |
+| App ELF | 155,020 | `f3ee81c8cb50705222b43d313ee6750eee55a5336632465030b0fbd1f6531b9a` |
+| Loader BIN | 2,444 | `ce18cc388e9c81f1edcf6518e7a9d1575aae048ad3937c7415c2d876a6465f8c` |
+| Combined BIN | 65,536 | `14cf5619459f583dcb5015199930072d6259f31c5ea875b670f8595c149d0f90` |
+
+The app has 236 vector bytes, 16,344 text bytes and 152 initialized RAM-code
+load bytes. Static RAM is the unchanged 128-byte mailbox plus the 152-byte
+RAM program routine/literals, with zero BSS. Initial SP is `0x20004ff8`,
+Thumb entry `0x080021b5`; all 59 vectors pass for app and loader. Reset's
+static frame is 984 bytes. GCC frame reports plus disassembly call/tail edges,
+conservatively allowing every fixed target callback at each indirect site,
+bound foreground stack at 1,284 bytes; adding a 32-byte exception frame and
+the 8-byte fault handler gives 1,324 bytes within the reserved 2 KiB. This
+is static inspection, not a measured stack high-water mark. The app has no
+undefined symbols, heap or runtime-library calls. The copied flash routine
+and literals remain wholly in RAM, with no flash calls while busy and no
+erase path. Loader BIN is byte-identical to the preceding candidate;
+loader/update source, 55 KiB app range, metadata erase, mailbox ABI and
+reserved reset RAM are unchanged.
+
+Tests retain the applied hero through pending edits across every quarter-dB
+value, all three steps and both labels; supplied golden transitions include
+pending down to 0.00 and up to 31.75, unchanged applied 2.00/30.00, actual
+locked-button feedback, known error through mailbox rejection and UNKNOWN
+with a deliberately poisoned numeric field. Ownership tests cover direct
+SET without lease, rejected tokens, acquisition preserving last source,
+feedback timeout without held-key repetition, release/expiry and fresh
+release before local editing. Dedicated calibration/identification layouts
+remain exercised by their existing production models.
+
+Label journal models interrupt every halfword, inject torn/no/full writes
+with error returns, flip all 128 bits, forge invalid typed/reserved/label
+fields with recomputed CRCs, exhaust shared slots and verify no-op saves.
+Mixed display/button/label records retain each independently valid value;
+saves do not touch app/loader metadata, and unchanged loader update erases
+all setup. UI models verify commit-only badge publication, explicit save,
+readback/status, cancellation, ownership refusal and fault retention with
+at most one programmed halfword per foreground poll. Existing PTY serial,
+attctl, calibration, display and updater models remain in the full suite.
+These results do not qualify physical OLED readability, ADC/button timing,
+flash interruption/endurance or RF attenuation.
+
 ## v0.4.0 button calibration — offline candidate
 
 `make -B all test inspect` passes with Arm GCC 14.2.1: seven C executables and 106 Python methods, including production ADC/UI/config code driven through local PTYs by the new cross-platform helper. All seven C suites pass AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled. Tests use simulated UART/flash/GPIO/ADC only; **all new physical behavior is UNRUN**. See the [artifact-bound qualification/update plan](button-qualification.md). Published releases, installed images and earlier retained candidates are unchanged.

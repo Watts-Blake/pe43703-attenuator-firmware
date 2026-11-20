@@ -39,16 +39,18 @@ static void send_frame(Controller *c, uint32_t qdb, uint32_t source) {
     c->bus.delay_us(c->bus.context, 1);
     /* Publish applied software state only after LE returns low. No RF readback. */
     c->qdb = qdb; c->source = source; ++c->issued;
+    c->applied_known = true; c->latch_error = false;
 }
 void controller_boot(Controller *c, Bus bus) {
     c->bus = bus; c->qdb = 0; c->permutation = 0; c->issued = 0;
+    c->applied_known = false; c->latch_error = false;
     send_frame(c, 0, SOURCE_BOOT);
 }
 bool controller_set(Controller *c, uint32_t qdb) {
     return controller_set_from(c, qdb, SOURCE_USB);
 }
 bool controller_set_from(Controller *c, uint32_t qdb, uint32_t source) {
-    if (qdb > 127) return false;
+    if (qdb > 127) { c->latch_error = true; return false; }
     send_frame(c, qdb, source); return true;
 }
 bool controller_permutation(Controller *c, uint32_t permutation) {

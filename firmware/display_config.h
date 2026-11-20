@@ -21,6 +21,7 @@ typedef struct {
 typedef struct {
     ConfigIo io;
     uint32_t index, slot, cursor, candidate, write_slots;
+    char label, candidate_label;
     uint16_t buttons[BUTTON_COUNT], candidate_buttons[BUTTON_COUNT];
     uint8_t record[2u*CONFIG_RECORD_BYTES];
     bool writing, fault, calibrated;
@@ -31,6 +32,7 @@ void config_init(DisplayConfig *c, ConfigIo io);
 uint32_t config_remaining(const DisplayConfig *c);
 /* No-op for already selected values. False means invalid/full/busy/unavailable. */
 bool config_save(DisplayConfig *c, uint32_t index);
+bool config_save_label(DisplayConfig *c, char label);
 bool config_save_buttons(DisplayConfig *c, const uint16_t values[BUTTON_COUNT]);
 /* At most one halfword per call; commit last. No erase callback exists. */
 void config_poll(DisplayConfig *c);

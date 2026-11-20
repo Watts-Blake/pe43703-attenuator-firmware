@@ -29,7 +29,11 @@ typedef struct {
     void *context;
 } Bus;
 enum { SOURCE_USB, SOURCE_LOCAL, SOURCE_BOOT };
-typedef struct { Bus bus; uint32_t qdb, permutation, issued, source; } Controller;
+typedef struct {
+    Bus bus; uint32_t qdb, permutation, issued, source;
+    /* Software latch completion only; no electrical/RF readback. */
+    bool applied_known, latch_error;
+} Controller;
 extern const uint8_t permutations[6][3]; /* SI, CLK, LE */
 uint16_t pe_frame(uint32_t qdb);
 void controller_boot(Controller *c, Bus bus);

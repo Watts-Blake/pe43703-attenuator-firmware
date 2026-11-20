@@ -1,6 +1,6 @@
 # UART bootloader and USB app updates
 
-The combined loader/app image passed SWD flash and independent verification, CH340 set/get and one same-image USB app update on one examined unit. The 2,156-byte app transferred in 34 chunks, the loader acknowledged CRC completion, and GET returned requested zero after app start. See the [qualification record](validation.md) and [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0). Retain SWD access until those checks pass on the particular board. The published v0.1.0 images omit display/buttons; the v0.4.0 button-calibration candidate builds on v0.3.0 display identification and offline v0.2.0 screen/buttons and remains hardware UNRUN.
+The combined loader/app image passed SWD flash and independent verification, CH340 set/get and one same-image USB app update on one examined unit. The 2,156-byte app transferred in 34 chunks, the loader acknowledged CRC completion, and GET returned requested zero after app start. See the [qualification record](validation.md) and [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0). Retain SWD access until those checks pass on the particular board. The published v0.1.0 images omit display/buttons; the v0.5.0 screen/label candidate includes button calibration and builds on v0.3.0 display identification and offline v0.2.0 screen/buttons and remains hardware UNRUN.
 
 ## Images and memory
 

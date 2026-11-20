@@ -99,6 +99,7 @@ static void test_loader_compatibility(void) {
     DisplayConfig c;config_init(&c,io(&m));assert(config_save(&c,89));complete(&c);
     assert(config_save_buttons(&c,(const uint16_t[]){4095,2500,1700,500,1100}));
     for(uint32_t i=0;i<16;++i)config_poll(&c);
+    assert(config_save_label(&c,'B'));complete(&c);
     assert(!memcmp(before,m.bytes,sizeof(before)) && bl_valid(f));
     Update u;bl_init(&u,f);char out[64];const char *hello="hello\n";
     while(*hello)(void)bl_feed(&u,*hello++,false,out);
@@ -106,7 +107,7 @@ static void test_loader_compatibility(void) {
     const char *begin="begin 00000100 00000000\n";
     while(*begin)(void)bl_feed(&u,*begin++,false,out);
     assert(!strcmp(out,"ok\n") && !bl_valid(f));
-    config_init(&c,io(&m));assert(c.index==41 && !c.calibrated && config_remaining(&c)==62);
+    config_init(&c,io(&m));assert(c.index==41 && !c.calibrated && c.label=='A' && config_remaining(&c)==62);
 }
 static const uint16_t buttons[BUTTON_COUNT]={4095,2500,1700,500,1100};
 static void finish_buttons(DisplayConfig *c) {
@@ -187,7 +188,55 @@ static void test_button_records(void) {
         assert(config_button_code(&c,raw)==expected);
     }
 }
+static void test_label_records(void) {
+    for(uint32_t stop=0;stop<=8;++stop) {
+        Memory m;empty(&m);DisplayConfig c;config_init(&c,io(&m));
+        assert(config_save(&c,89));complete(&c);
+        assert(config_save_buttons(&c,buttons));finish_buttons(&c);
+        assert(config_save_label(&c,'B'));
+        for(uint32_t n=0;n<stop;++n)config_poll(&c);
+        DisplayConfig reboot;config_init(&reboot,io(&m));
+        assert(reboot.label==(stop==8 ? 'B' : 'A') && reboot.index==89 && reboot.calibrated);
+        assert(!memcmp(reboot.buttons,buttons,sizeof(buttons)));
+        config_cancel(&c);
+        assert(config_save(&reboot,42));complete(&reboot);
+        assert(config_save_label(&reboot,'B'));complete(&reboot);
+        config_init(&c,io(&m));assert(c.label=='B' && c.index==42 && c.calibrated);
+    }
+    for(uint32_t fail=1;fail<=8;++fail)for(uint32_t tear=0;tear<4;++tear) {
+        Memory m;empty(&m);DisplayConfig c;config_init(&c,io(&m));
+        assert(config_save_label(&c,'B'));complete(&c);
+        m.fail=m.writes+fail;m.tear=tear==0 ? 0 : tear==1 ? 65535u : tear==2 ? 255u : 65280u;
+        assert(config_save_label(&c,'A'));complete(&c);assert(c.fault && c.label=='B');
+        assert(!config_save_label(&c,'A'));config_init(&c,io(&m));
+        assert(c.label=='B' || (fail==8 && c.label=='A'));
+    }
+    Memory base;empty(&base);DisplayConfig c;config_init(&c,io(&base));
+    assert(!config_save_label(&c,'C') && !config_save_label(&c,0));
+    assert(config_save_label(&c,'A') && !c.writing && !base.writes);
+    assert(config_save_label(&c,'B'));complete(&c);
+    for(uint32_t bit=0;bit<128;++bit) {
+        Memory m=base;m.bytes[CONFIG_BASE-FLASH_BASE+bit/8u]^=(uint8_t)(1u<<(bit%8u));
+        config_init(&c,io(&m));assert(c.label=='A' && c.index==41 && !c.calibrated);
+    }
+    for(uint32_t field=0;field<7;++field) {
+        Memory m=base;uint8_t *p=m.bytes+CONFIG_BASE-FLASH_BASE;
+        if(field==0)p[0]=4;
+        if(field==1)p[1]=1;
+        if(field==2){p[2]='C';p[4]=(uint8_t)(p[2]^255u);}
+        if(field==3)p[3]=1;
+        if(field==4)p[4]^=1;
+        if(field==5)p[5]=0;
+        if(field==6)p[6]=1;
+        Flash f={&m,read_byte,0,0};put(&m,CONFIG_BASE+8,bl_crc(f,CONFIG_BASE,8));
+        config_init(&c,io(&m));assert(c.label=='A');
+    }
+    Memory m;empty(&m);config_init(&c,io(&m));
+    for(uint32_t i=0;i<CONFIG_SLOTS;++i){assert(config_save_label(&c,i%2u ? 'A' : 'B'));complete(&c);}
+    assert(!config_remaining(&c) && config_save_label(&c,'A') && !config_save_label(&c,'B'));
+    for(uint32_t a=FLASH_BASE;a<CONFIG_BASE;++a)assert(read_byte(&m,a)==255);
+}
 int main(void) {
-    test_interruptions();test_corruption_and_bounds();test_valid_crc_invalid_fields();test_loader_compatibility();test_button_records();
+    test_interruptions();test_corruption_and_bounds();test_valid_crc_invalid_fields();test_loader_compatibility();test_button_records();test_label_records();
     puts("Display config: interrupted/torn halfwords, bit corruption, append bounds and unchanged loader geometry passed");return 0;
 }
