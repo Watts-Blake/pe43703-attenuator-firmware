@@ -27,24 +27,35 @@ static void text(char *out, const char *in) {
     while (in[i] && i<21) { out[i]=in[i]; ++i; }
     while (i<22) out[i++]=0;
 }
-static void value(char *out, const char *label, uint32_t qdb) {
-    text(out,label);
-    uint32_t i=0; while (out[i]) ++i;
-    format_db(qdb,out+i);
-}
 void screen_init(Screen *s, OledBus bus) {
     oled_init(&s->wire,bus); s->phase=0; s->cursor=0;
     s->dirty=true; s->testing=false; s->holding=false; s->done=false;
     s->identifying=false; s->calibrating=false; s->index=41;
     for (uint32_t i=0;i<8;++i) text(s->lines[i],"");
-    format_db(0,s->large);
+    ScreenState state={0,0,1,SOURCE_BOOT,false,false,false,false,'A'};
+    screen_show(s,&state);
 }
-void screen_show(Screen *s, uint32_t applied, uint32_t pending, uint32_t step,
-                 uint32_t source, bool locked) {
-    text(s->lines[0],"APPLIED DB"); format_db(applied,s->large);
-    value(s->lines[4],"PENDING ",pending); value(s->lines[5],"STEP ",step);
-    text(s->lines[6],source==SOURCE_LOCAL ? "SOURCE LOCAL" : source==SOURCE_BOOT ? "SOURCE BOOT" : "SOURCE USB");
-    text(s->lines[7],locked ? "USB LOCK" : "UNLOCKED"); s->dirty=true;
+void screen_show(Screen *s, const ScreenState *v) {
+    s->calibrating=false; s->known=v->known && v->applied<=127;
+    s->locked=v->locked; s->label=v->label=='B' ? 'B' : 'A';
+    s->step_index=v->step==20 ? 2u : v->step==4 ? 1u : 0u;
+    bool error=v->error || !s->known;
+    text(s->lines[0],error ? "ERROR" : v->source==SOURCE_USB ? "USB" : "LOCAL");
+    if (s->known) format_db(v->applied,s->large);
+    else { const char unknown[]="UNKNOWN"; for (uint32_t i=0;i<8;++i) s->large[i]=unknown[i]; }
+    text(s->lines[5],s->step_index==2 ? "STEP 5.00" : s->step_index==1 ? "STEP 1.00" : "STEP 0.25");
+    s->message=error ? SCREEN_ERROR : v->locked ?
+        (v->feedback ? SCREEN_LOCKED : SCREEN_CALM) :
+        v->pending!=v->applied && v->pending<=127 ? SCREEN_PENDING : SCREEN_CALM;
+    text(s->lines[7],"");
+    if (s->message==SCREEN_PENDING) {
+        char number[6]; format_db(v->pending,number);
+        uint32_t n=0; while (number[n]) { s->lines[7][n]=number[n]; ++n; }
+        const char suffix[]="  OK TO APPLY";
+        for (uint32_t i=0;i<sizeof(suffix);++i) s->lines[7][n+i]=suffix[i];
+    } else if (s->message==SCREEN_LOCKED) text(s->lines[7],"LOCKED  USB OWNS");
+    else if (s->message==SCREEN_ERROR) text(s->lines[7],"ERR NO LATCH");
+    s->dirty=true;
 }
 void screen_suspend(Screen *s) {
     oled_cancel(&s->wire); s->phase=0; s->dirty=true;
@@ -75,6 +86,39 @@ void screen_calibration(Screen *s,const char *prompt,char key,uint32_t raw,
 void screen_stop_test(Screen *s) {
     if (s->testing) { s->testing=false; s->holding=false; s->dirty=true; s->done=false; }
 }
+/* Query only the requested pixel: no 1 KiB framebuffer or dynamic allocation. */
+static bool text_pixel(const char *p, uint32_t x, uint32_t y, uint32_t scale) {
+    uint32_t column=x/(6u*scale);
+    for (uint32_t i=0;i<column;++i) if (!p[i]) return false;
+    return p[column] && y<7u*scale &&
+        (glyph(p[column],(x/scale)%6u)&(1u<<(y/scale)))!=0;
+}
+static bool main_pixel(const Screen *s, uint32_t x, uint32_t y) {
+    static const uint8_t lock[8]={0x3c,0x42,0x42,0x7e,0xff,0xe7,0xe7,0xff};
+    if (y==8 || y==41) return true;
+    if (y<8) {
+        if (x<8) return s->locked && (lock[y]&(1u<<(7u-x)));
+        if (x>=117 && x<125) {
+            bool ink=x>=118 && (glyph(s->label,x-118u)&(1u<<y));
+            return !ink;
+        }
+        return x>=10 && text_pixel(s->lines[0],x-10u,y,1);
+    }
+    if (y<41) return x>=4 && text_pixel(s->large,x-4u,y-(s->known ? 9u : 17u),s->known ? 4u : 2u);
+    if (y>=45 && y<52) {
+        if (x>=68 && x<84 && y>=47 && y<51) {
+            uint32_t i=(x-68u)/6u, dx=(x-68u)%6u;
+            return dx<4 && (i==s->step_index || dx==0 || dx==3 || y==47 || y==50);
+        }
+        return x>=4 && text_pixel(s->lines[5],x-4u,y-45u,1);
+    }
+    if (y>=54 && x>=2 && x<126 && s->message!=SCREEN_CALM) {
+        bool ink=x>=5 && y>=55 && text_pixel(s->lines[7],x-5u,y-55u,1);
+        if (s->message==SCREEN_ERROR) return x==2 || x==125 || y==54 || y==63 || ink;
+        return !ink;
+    }
+    return false;
+}
 uint8_t screen_image(const Screen *s, uint32_t x, uint32_t page) {
     if (x>=128 || page>=8) return 0;
     if (s->testing || s->identifying) {
@@ -96,14 +140,11 @@ uint8_t screen_image(const Screen *s, uint32_t x, uint32_t page) {
         if (x>=24 && x<29) bits|=glyph((char)('0'+page),x-24u);
         return bits;
     }
-    if (!s->calibrating && (page==1 || page==2)) {
-        uint32_t column=x/12u;
-        uint32_t length=0; while (s->large[length]) ++length;
-        if (column>=length) return 0;
-        uint8_t col=glyph(s->large[column],(x%12u)/2u), result=0;
-        for (uint32_t bit=0;bit<8;++bit)
-            if (col & (1u<<((page-1u)*4u+bit/2u))) result|=(uint8_t)(1u<<bit);
-        return result;
+    if (!s->calibrating) {
+        uint8_t bits=0;
+        for (uint32_t b=0;b<8;++b)
+            if (main_pixel(s,x,page*8u+b)) bits|=(uint8_t)(1u<<b);
+        return bits;
     }
     uint32_t column=x/6u;
     return column<21 ? glyph(s->lines[page][column],x%6u) : 0;

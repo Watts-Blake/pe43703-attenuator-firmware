@@ -1,15 +1,24 @@
 #ifndef SCREEN_H
 #define SCREEN_H
 #include "oled.h"
+/* Applied knowledge comes from completed controller transactions, never requests. */
+typedef struct {
+    uint32_t applied, pending, step, source;
+    bool known, error, locked, feedback;
+    char label;
+} ScreenState;
+enum { SCREEN_CALM, SCREEN_PENDING, SCREEN_LOCKED, SCREEN_ERROR };
 typedef struct {
     Oled wire;
     uint32_t phase, cursor, test_start, hold_start, index;
-    char lines[8][22], large[6];
+    char lines[8][22], large[8];
+    uint32_t message, step_index;
+    bool locked, known;
+    char label;
     bool dirty, testing, holding, done, identifying, calibrating;
 } Screen;
 void screen_init(Screen *s, OledBus bus);
-void screen_show(Screen *s, uint32_t applied, uint32_t pending, uint32_t step,
-                 uint32_t source, bool locked);
+void screen_show(Screen *s, const ScreenState *state);
 void screen_suspend(Screen *s);
 void screen_test(Screen *s, uint32_t now_ms);
 void screen_stop_test(Screen *s);

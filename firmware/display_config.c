@@ -41,6 +41,11 @@ static bool valid_display(const uint8_t *p) {
            p[4]==(uint8_t)(p[2]^255u) && p[5]==255 && p[6]==0 && p[7]==0 &&
            get(p+8)==crc(p,8) && get(p+12)==UINT32_C(0x44535031);
 }
+static bool valid_label(const uint8_t *p) {
+    return p[0]==3 && !p[1] && (p[2]=='A' || p[2]=='B') && !p[3] &&
+        p[4]==(uint8_t)(p[2]^255u) && p[5]==255 && !p[6] && !p[7] &&
+        get(p+8)==crc(p,8) && get(p+12)==UINT32_C(0x4c424c33);
+}
 static bool valid_buttons(const uint8_t *p, uint16_t values[BUTTON_COUNT]) {
     if (get(p)!=2 || half(p+14)!=0 || get(p+16)!=UINT32_C(0x42434e54) ||
         get(p+20)!=crc(p,20) || get(p+24)!=~get(p+20) ||
@@ -49,6 +54,7 @@ static bool valid_buttons(const uint8_t *p, uint16_t values[BUTTON_COUNT]) {
     return config_buttons_valid(values);
 }
 void config_init(DisplayConfig *c, ConfigIo io) {
+    c->label='A'; c->candidate_label='A';
     c->io=io; c->index=DISPLAY_DEFAULT; c->slot=0; c->cursor=0; c->write_slots=0;
     c->writing=false; c->fault=false; c->calibrated=false; c->candidate=DISPLAY_DEFAULT;
     for (uint32_t i=0;i<BUTTON_COUNT;++i) c->buttons[i]=c->candidate_buttons[i]=0;
@@ -63,6 +69,7 @@ void config_init(DisplayConfig *c, ConfigIo io) {
         /* Append beyond ALL used/partially programmed slots, never reuse holes. */
         if (!empty) c->slot=slot+1u;
         if (valid_display(record)) c->index=record[2];
+        if (valid_label(record)) c->label=(char)record[2];
         uint16_t values[BUTTON_COUNT];
         if (length==2u*CONFIG_RECORD_BYTES && valid_buttons(record,values)) {
             for (uint32_t i=0;i<BUTTON_COUNT;++i) c->buttons[i]=values[i];
@@ -82,6 +89,16 @@ bool config_save(DisplayConfig *c, uint32_t index) {
     put(c->record+4,(index^65535u));
     put(c->record+8,crc(c->record,8)); put(c->record+12,UINT32_C(0x44535031));
     c->candidate=index; c->cursor=0; c->write_slots=1; c->writing=true;
+    return true;
+}
+bool config_save_label(DisplayConfig *c, char label) {
+    if ((label!='A' && label!='B') || !available(c)) return false;
+    if (label==c->label) return true;
+    if (!config_remaining(c)) return false;
+    uint32_t v=(uint32_t)(uint8_t)label;
+    put(c->record,3u|(v<<16)); put(c->record+4,v^65535u);
+    put(c->record+8,crc(c->record,8)); put(c->record+12,UINT32_C(0x4c424c33));
+    c->candidate_label=label; c->cursor=0; c->write_slots=1; c->writing=true;
     return true;
 }
 bool config_save_buttons(DisplayConfig *c, const uint16_t values[BUTTON_COUNT]) {
@@ -116,7 +133,8 @@ void config_poll(DisplayConfig *c) {
     }
     c->cursor+=2;
     if (c->cursor==c->write_slots*CONFIG_RECORD_BYTES) {
-        if (c->write_slots==1) c->index=c->candidate;
+        if (c->record[0]==3) c->label=c->candidate_label;
+        else if (c->write_slots==1) c->index=c->candidate;
         else {
             for (uint32_t i=0;i<BUTTON_COUNT;++i) c->buttons[i]=c->candidate_buttons[i];
             c->calibrated=true;

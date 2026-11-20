@@ -149,15 +149,17 @@ static void frame(Screen *s,Display *d,uint32_t now) {
 }
 static void test_display(void) {
     Display d={0}; Screen s; screen_init(&s,bus(&d));
-    screen_show(&s,127,80,4,SOURCE_USB,true); frame(&s,&d,0);
-    assert(d.data==2080 && !strcmp(s.large,"31.75") && !strcmp(s.lines[6],"SOURCE USB") && !strcmp(s.lines[7],"USB LOCK"));
+    ScreenState view={127,80,4,SOURCE_USB,true,false,true,false,'B'};
+    screen_show(&s,&view); frame(&s,&d,0);
+    assert(d.data==2080 && !strcmp(s.large,"31.75") && !strcmp(s.lines[0],"USB") && s.locked && s.message==SCREEN_CALM);
     bool nonzero=false;
     for(uint32_t page=0;page<8;++page) for(uint32_t x=0;x<128;++x) {
         assert(d.ram[page][x]==screen_image(&s,x,page)); nonzero|=d.ram[page][x]!=0;
     }
     assert(nonzero);
-    screen_show(&s,1,2,20,SOURCE_LOCAL,true); frame(&s,&d,1);
-    assert(!strcmp(s.large,"0.25") && !strcmp(s.lines[6],"SOURCE LOCAL") && !strcmp(s.lines[7],"USB LOCK"));
+    view.applied=1; view.pending=2; view.step=20; view.source=SOURCE_LOCAL;
+    screen_show(&s,&view); frame(&s,&d,1);
+    assert(!strcmp(s.large,"0.25") && !strcmp(s.lines[0],"LOCAL") && s.locked && s.message==SCREEN_CALM);
     uint32_t bytes=d.bytes; frame(&s,&d,2); assert(d.bytes==bytes); /* idle has no writes */
     screen_test(&s,UINT32_MAX-100u); frame(&s,&d,UINT32_MAX-100u);
     for(uint32_t page=0;page<8;++page) {
@@ -179,8 +181,9 @@ static void latch_pins(void *ctx,uint32_t value) {
 static void test_post_latch(void) {
     Controller c; Latch l={&c,0,SOURCE_BOOT,false}; Bus b={latch_pins,quiet,&l}; controller_boot(&c,b);
     l.checking=true; assert(controller_set_from(&c,100,SOURCE_LOCAL));
-    assert(c.qdb==100 && c.source==SOURCE_LOCAL && c.issued==2);
-    l.expected=100; l.source=SOURCE_LOCAL; assert(controller_set(&c,0)); assert(!c.qdb && c.source==SOURCE_USB);
+    assert(c.qdb==100 && c.source==SOURCE_LOCAL && c.issued==2 && c.applied_known && !c.latch_error);
+    assert(!controller_set(&c,128) && c.qdb==100 && c.issued==2 && c.applied_known && c.latch_error);
+    l.expected=100; l.source=SOURCE_LOCAL; assert(controller_set(&c,0)); assert(!c.qdb && c.source==SOURCE_USB && c.applied_known && !c.latch_error);
 }
 static uint32_t unavailable_adc(void *ctx,uint32_t address) { (void)ctx;(void)address;return 0; }
 typedef struct { uint8_t bytes[1024]; uint32_t writes; bool fail; } ConfigMemory;
@@ -352,7 +355,7 @@ static void test_calibration_ui(void) {
     assert(u.calibration.active && u.calibration.phase==CAL_SAVING);
     assert(!ui_poll(&u,&c,&adc,&probe,now,0,out,false));
     assert(u.identification.config.calibrated && !u.calibration.active && c.issued==1 && !u.pending);
-    assert(!strcmp(u.screen.lines[0],"APPLIED DB") && u.screen.index==41);
+    assert(!strcmp(u.screen.lines[0],"LOCAL") && !u.screen.calibrating && u.screen.index==41);
     /* Reboot the model: persisted values must drive the actual pending/apply path. */
     screen_suspend(&u.screen);ui_init(&u,&c,bus(&d));ui_configure(&u,config);assert(u.identification.config.calibrated);
     press(&u,&c,2048,&now);assert(!u.pending); /* old PLUS is now UNKNOWN */
@@ -384,8 +387,50 @@ static void test_calibration_ui(void) {
     assert(!ui_poll(&u,&c,&unavailable,&probe,now,5000,out,false));
     assert(!u.calibration.active && u.calibration.result==CAL_SAMPLE && c.qdb==40);
 }
+static void test_label_ui(void) {
+    Display d={0};Controller c;controller_boot(&c,rf());Ui u;ui_init(&u,&c,bus(&d));
+    Oled probe;oled_init(&probe,bus(&d));ConfigMemory m={0};memset(m.bytes,255,sizeof(m.bytes));
+    ConfigIo io={config_read,config_write,&m};ui_configure(&u,io);
+    AdcIo adc={unavailable_adc,no_write,quiet,0};char out[16];uint32_t now=0;
+    command(&u,&c,&probe,"label\n",now,"label 1\r\n");
+    command(&u,&c,&probe,"label get\n",now,"label A 62\r\n");
+    command(&u,&c,&probe,"label save C\n",now,"err label\r\n");assert(!m.writes);
+    command(&u,&c,&probe,"label save B\n",now,"ok saving\r\n");
+    command(&u,&c,&probe,"label status\n",now,"saving\r\n");assert(!m.writes);
+    command(&u,&c,&probe,"buttons start\n",now,"err busy\r\n");
+    command(&u,&c,&probe,"display start\n",now,"err busy\r\n");
+    command(&u,&c,&probe,"oledtest\n",now,"err busy\r\n");
+    command(&u,&c,&probe,"label save A\n",now,"err busy\r\n");
+    for(uint32_t i=0;i<8;++i) {
+        uint32_t before=m.writes;
+        assert(!ui_poll(&u,&c,&adc,&probe,now,0,out,false)); assert(m.writes==before+1u);
+        assert(u.screen.label==(i==7 ? 'B' : 'A')); /* publish only at commit */
+    }
+    command(&u,&c,&probe,"label status\n",now,"saved B\r\n");
+    command(&u,&c,&probe,"label get\n",now,"label B 61\r\n");
+    assert(c.issued==1 && c.qdb==0 && u.screen.label=='B');
+    command(&u,&c,&probe,"label save B\n",now,"ok saving\r\n");
+    assert(!u.label_saving && m.writes==8); /* no-op uses no slot */
+    screen_suspend(&u.screen);ui_init(&u,&c,bus(&d));ui_configure(&u,io);
+    (void)ui_poll(&u,&c,&adc,&probe,now,0,out,false);assert(u.screen.label=='B');
+    const char *cancel[]={"label cancel\n","set 1\n","profile 1234abcd\n","bad\n"};
+    const char *answer[]={"ok cancel\r\n","ok 1.00\r\n","ok profile\r\n","err\r\n"};
+    for(uint32_t i=0;i<4;++i) {
+        command(&u,&c,&probe,"label save A\n",now,"ok saving\r\n");
+        (void)ui_poll(&u,&c,&adc,&probe,now,0,out,false);
+        command(&u,&c,&probe,cancel[i],now,answer[i]); assert(!u.label_saving);
+        DisplayConfig reboot;config_init(&reboot,io);assert(reboot.label=='B');
+        if(i==2) {
+            command(&u,&c,&probe,"label save A\n",now,"err busy\r\n");
+            command(&u,&c,&probe,"profile end 1234abcd\n",now,"ok end\r\n");
+        }
+    }
+    command(&u,&c,&probe,"label save A\n",now,"ok saving\r\n");m.fail=true;
+    (void)ui_poll(&u,&c,&adc,&probe,now,0,out,false);
+    command(&u,&c,&probe,"label status\n",now,"err save\r\n");assert(u.screen.label=='B');
+}
 int main(void) {
-    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();test_identification();test_calibration_ui();
+    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();test_identification();test_calibration_ui();test_label_ui();
     puts("UI: guarded ladder, median/debounce/release, clamping, post-latch state, leases/wrap, fixed OLED bytes and bounded alignment passed");
     return 0;
 }
