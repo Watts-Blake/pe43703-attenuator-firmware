@@ -51,7 +51,7 @@ The text format comes from static inspection of the bundled tool in [att6000_con
 | Pins | v1 use | Qualification |
 | --- | --- | --- |
 | PB11/PB12/PB13 | SI/CLK/LE in selectable order | Mapping 0 functionally tested on one unit; connections not continuity-traced |
-| PA4–PA7 | Inputs by default; opt-in OLED role probe | Display roles remain unqualified; see [probe profile](docs/oled-probe.md) |
+| PA4–PA7 | Inputs by default; opt-in OLED role probe | Working roles observed on two units; controller/alignment pending; see [probe observations](docs/oled-probe.md#observed-wiring-on-two-units) |
 | PA9 / PA10 | USART1 TX / RX | CH340 command/reply and app update tested on one unit; traces not continuity-checked |
 | PA13 / PA14 | SWDIO / SWCLK | Preserve SWD; no debug-port remap |
 
@@ -88,11 +88,11 @@ ok 0.00
 
 Commands accept CR, LF or CRLF. Values must be 0–31.75 dB in exact 0.25 dB steps, with one or two digits before the optional decimal point and up to two after it. Attenuation responses always use two decimal places and CRLF. Invalid syntax, range, overlong input or UART errors return `err` at the line boundary without applying that line. A partial line occupies at most 31 bytes and waits for its terminator. An overlong/bad line is discarded through its terminator; then a fresh command can be sent. There is no command echo, unsolicited boot banner or persistent setting storage.
 
-**v0.1.1 development diagnostic:** `adc` (alias `diag adc`) returns one raw PA1 sample as `adc NNNN\r\n`, or `err adc\r\n` on a bounded ADC failure. It is inactive until requested and does not change attenuation. This addition is offline-tested and absent from the published v0.1.0 images; button thresholds and the display interface remain unqualified. `version` reports `version 0.1.1`. See [input diagnostics](docs/diagnostics.md). `oledprobe` starts a finite visual role sweep with indexed USB output; a valid SET cancels it. See [exact trial mapping and limits](docs/oled-probe.md).
+**v0.1.1 development diagnostic:** `adc` (alias `diag adc`) returns one raw PA1 sample as `adc NNNN\r\n`, or `err adc\r\n` on a bounded ADC failure. It is inactive until requested and does not change attenuation. This addition is offline-tested and absent from the published v0.1.0 images; two-unit [button ladder observations and proposed unqualified bands](docs/diagnostics.md#observed-pa1-front-button-ladder) are documented separately. `version` reports `version 0.1.1`. See [input diagnostics](docs/diagnostics.md). `oledprobe` starts a finite visual role sweep with indexed USB output; a valid SET cancels it. See [exact trial mapping and limits](docs/oled-probe.md).
 
 **Observed on one unit:** `get` returned `0.00\r\n`; `set 20.00` returned `ok 20.00\r\n`. After a monotonic 20-second hold, `set 0` returned `ok 0.00\r\n` and `get` returned `0.00\r\n`, with the display/button board connected.
 
-**USB updates:** the CH340 is a USB-to-UART bridge. One same-image, 2,156-byte app update passed through the UART loader in 34 chunks, with CRC-completion acknowledgment and `get` returning zero after app start. This exercised the update path, without a version change or independent post-update SWD readback. CRC detects corruption; it is not authentication. After initial SWD installation, use the [app-only update guide](docs/usb-update.md). Keep SWD access until command and app-update checks pass on the particular unit.
+**USB updates:** the CH340 is a USB-to-UART bridge. One same-image, 2,156-byte app update passed through the UART loader in 34 chunks, with CRC-completion acknowledgment and `get` returning zero after app start. This exercised the update path, without a version change or independent post-update SWD readback. CRC detects corruption; it is not authentication. After initial SWD installation, use the [app-only update guide](docs/usb-update.md). A later [v0.1.0-to-v0.1.1 update](docs/usb-update.md#v010-compatibility-and-validation) succeeded using `get` → `bootloader`; v0.1.0 has no `version` query. Keep SWD access until command and app-update checks pass on the particular unit.
 
 ## FAQ
 
@@ -106,7 +106,7 @@ No backup is available. Removing STM32F1 read protection erases the original fir
 
 ### Will the OLED and five buttons work?
 
-Published v0.1.0 omits display/button support and makes no writes on PA4–PA7. Development diagnostics add an explicit [OLED role probe](docs/oled-probe.md); ordinary operation still leaves the display idle and buttons inert. Initial SWD tests used a detached display; USB qualification passed with the display/button board reconnected. The display interface has not been identified.
+Published v0.1.0 omits display/button support and makes no writes on PA4–PA7. Development diagnostics add an explicit [OLED role probe](docs/oled-probe.md); ordinary operation still leaves the display idle and buttons inert. Initial SWD tests used a detached display; USB qualification passed with the display/button board reconnected. Working OLED signal roles and a distinct PA1 code for every button were observed on two units; [controller identification/alignment](docs/oled-probe.md#observed-wiring-on-two-units) and [button thresholds](docs/diagnostics.md#observed-pa1-front-button-ladder) remain unqualified. [Applied-state display, source/lock indication and USB-profile precedence](docs/design.md#applied-state-display-and-local-control-requirements-unimplemented) are future requirements, not implemented behavior.
 
 ### Is `get` a measurement?
 

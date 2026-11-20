@@ -1,6 +1,6 @@
 # v0.1.1 input diagnostics (development)
 
-The v0.1.1 development app adds an explicit PA1 input diagnostic. It has passed offline tests; it has not yet been installed or qualified on a board. The published v0.1.0 binaries do not include this command. Buttons remain inert. The OLED stays idle unless the separate [role probe](oled-probe.md) is explicitly requested.
+The v0.1.1 development app adds an explicit PA1 input diagnostic. It has passed offline tests and produced distinct held-button readings on two examined units, as recorded below. Thresholds and button actions remain unqualified. The published v0.1.0 binaries do not include this command. Buttons remain inert. The OLED stays idle unless the separate [role probe](oled-probe.md) is explicitly requested.
 
 Send one command at a time at 115200 8N1, waiting for the full reply:
 
@@ -15,10 +15,33 @@ ADC1 remains disabled and PA1 keeps its reset input configuration until an expli
 
 The existing 72 MHz app clock supplies ADC at 12 MHz through APB2/6. Acquisition uses 239.5 ADC cycles (21 µs including the 12.5-cycle conversion). Startup waits 2 µs; reset-calibration, calibration and conversion each allow at most 100 polls separated by 1 µs. A request therefore waits at most 302 µs explicitly, plus bounded register, formatting and call overhead. This is a software bound under the app's working-clock contract, not a measured hardware latency guarantee. The next command can be processed after the reply. Pipelining commands remains unsupported by the polling UART.
 
-A stock-board register snapshot found PA1 configured as analog input, ADC1 enabled, channel-1 acquisition set to 239.5 cycles and a regular sequence of channels 1, 0, 0. This supports testing PA1 as a possible button-ladder input; it does not identify button thresholds or prove the wiring. This app deliberately samples only channel 1. Board variants and unknown external source impedance still require hardware observation.
+A stock-board register snapshot found PA1 configured as analog input, ADC1 enabled, channel-1 acquisition set to 239.5 cycles and a regular sequence of channels 1, 0, 0. The held-button observations below confirm PA1 as the front-button ladder input on two units; the snapshot alone did not identify button thresholds or prove the wiring. This app deliberately samples only channel 1. Board variants and unknown external source impedance still require hardware observation.
 
 The implementation follows ST's [RM0008 Rev21](https://www.st.com/resource/en/reference_manual/cd00171190.pdf), §§11.3.1, 11.3.4, 11.4 and 11.12: ADC registers use 32-bit accesses, calibration follows power stabilization, and a second ADON-only write starts a regular single conversion. The manufacturer-authored manual was also checked through a [distributor-hosted copy](https://www.hestore.eu/en/prod_getfile.php?id=14113). [DS5319 Rev20](https://www.st.com/resource/en/datasheet/stm32f103c8.pdf) supplies the PA1/ADC12_IN1 pin assignment, 14 MHz ADC limit and startup characteristics.
 
 `make test` executes the actual diagnostic register sequence against a host model. It checks all 4096 sample values, calibration ordering, stale calibration-data rejection, one-conversion completion, bounded stuck flags and cleanup, unexpected ownership/clock refusal, malformed/overflow/receive-error recovery, unchanged RF state and a subsequent `set`. These tests establish software behavior, not physical button mapping or ADC accuracy.
 
-The OLED controller, PA4–PA7 signal roles, reset/chip-select wiring and panel supply arrangement remain unidentified. The separate [OLED role probe](oled-probe.md) tries fixed SSD1306/SH1106 profiles under its stated electrical and geometry assumptions; it does not establish those facts or affect ADC sampling.
+## Observed PA1 front-button ladder
+
+Held presses with a known physical button order produced these stable raw 12-bit codes on two units. The ranges combine both units; they are observations, not calibrated acceptance thresholds.
+
+| Button | Observed stable codes | Proposed inclusive band (UNQUALIFIED) |
+| --- | --- | --- |
+| RIGHT | 809–820 | 780–850 |
+| MINUS | 1016–1021 | 970–1060 |
+| OK | 1352–1368 | 1310–1410 |
+| PLUS | 2028–2048 | 1980–2110 |
+| LEFT | 4092–4093 | 4050–4095 |
+| Released | Near zero in diagnostic captures | 0–32 |
+
+All codes outside the proposed disjoint bands must remain UNKNOWN, rather than round to the nearest button. In particular, one observed 1092 sample during entry into an OK press is an UNKNOWN transition, not a stable OK level or another button. Near-full-scale LEFT is established by controlled held presses on these units; a high reading alone does not rule out an electrical fault.
+
+These starting engineering bands are **unqualified and unimplemented**. Supply, noise, temperature, resistor variation, stable releases, holds and transitions on both units need validation before button actions are enabled. Captures sampled each unit at about 10 Hz; sample timestamps bracket changes only to that resolution and are not exact electrical edges. No voltage or RF measurement follows from these codes.
+
+## Future button processing proposal (unimplemented)
+
+A proposed nonblocking 200 Hz sampler would use a five-sample median, a candidate stable for 30 ms before press/release, and hysteresis within the guarded disjoint bands. Emit one press per stable transition, require a debounced release before another key, and initially omit autorepeat. Faster sampling and debounce are design proposals, not current firmware behavior or measured qualification.
+
+A later implementation must preserve UART and PE43703 responsiveness without busy waits and retain raw, filtered, candidate and debounced timestamps so filtering does not invent electrical edges. Offline validation should cover retained captures, noisy/short/transition traces, UNKNOWN gaps, stuck inputs, hysteresis, press/release behavior, bounded logging and concurrent UART service. Button actions must also obey the [applied-state display and USB-profile precedence requirements](design.md#applied-state-display-and-local-control-requirements-unimplemented).
+
+The separate [OLED observations and role probe](oled-probe.md) document working PA4–PA7 roles on two units. Actual controller silicon, chip-select wiring and panel supply arrangement remain unidentified; the probe does not affect ADC sampling.
