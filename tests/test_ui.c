@@ -82,7 +82,7 @@ static void test_buttons(void) {
 static void test_lease(void) {
     Display d={0}; Controller c; controller_boot(&c,rf()); Ui u; ui_init(&u,&c,bus(&d)); Oled probe; oled_init(&probe,bus(&d));
     uint32_t now=UINT32_MAX-500u;
-    command(&u,&c,&probe,"profile\n",now,"profile 1\r\n");
+    command(&u,&c,&probe,"profile\n",now,"profile 2\r\n");
     command(&u,&c,&probe,"profile 1234abcd\n",now,"ok profile\r\n"); assert(u.locked && c.issued==1);
     command(&u,&c,&probe,"profile 11111111\n",now,"err busy\r\n");
     command(&u,&c,&probe,"profile keep 11111111\n",now,"err lock\r\n");
@@ -101,6 +101,45 @@ static void test_lease(void) {
     command(&u,&c,&probe,"profile 11111111\n",now,"ok profile\r\n");
     command(&u,&c,&probe,"profile end 11111111\n",now,"ok end\r\n"); assert(!u.locked);
     assert(c.issued==3);
+}
+static void test_atomic_profile_set(void) {
+    Display d={0}; Controller c; controller_boot(&c,rf()); Ui u; ui_init(&u,&c,bus(&d));
+    Oled probe; oled_init(&probe,bus(&d)); uint32_t now=0;
+    command(&u,&c,&probe,"profile set 1234abcd 20.00\n",now,"err lock\r\n");
+    command(&u,&c,&probe,"profile 1234abcd\n",now,"ok profile\r\n");
+    command(&u,&c,&probe,"profile set 11111111 20.00\n",now,"err lock\r\n");
+    const char *bad[]={"profile set 1234abcd 32\n","profile set 1234abcd 0.1\n",
+        "profile set 00000000 1\n","profile set 1234ABCd 1\n","profile set abcd 1\n",
+        "profile set 1234abcd\n","profile set 1234abcd 1 extra\n"};
+    for (size_t i=0;i<sizeof(bad)/sizeof(bad[0]);++i) command(&u,&c,&probe,bad[i],now,"err\r\n");
+    assert(c.issued==1 && u.locked);
+    command(&u,&c,&probe,"oledprobe\n",now,"ok oledprobe\r\n"); assert(probe.active);
+    command(&u,&c,&probe,"profile set 11111111 20\n",now,"err lock\r\n"); assert(probe.active);
+    command(&u,&c,&probe,"profile set 1234abcd 31.75\n",now,"ok 31.75\r\n");
+    assert(c.qdb==127 && c.issued==2 && u.pending==127 && c.source==SOURCE_USB && !probe.active);
+    command(&u,&c,&probe,"profile keep 1234abcd\n",1,"ok keep\r\n");
+    /* The lease can expire even while a command is arriving byte by byte. */
+    Line line={0}; AdcIo adc={no_read,no_write,quiet,0}; char out[16];
+    const char *partial="profile set 1234abcd 20.00";
+    while (*partial) assert(!ui_console_feed(&u,&line,&c,&adc,&probe,10000,*partial++,false,out));
+    assert(ui_console_feed(&u,&line,&c,&adc,&probe,10001,'\n',false,out)==10);
+    assert(!strcmp(out,"err lock\r\n") && !u.locked && c.issued==2);
+    now=10001;
+    press(&u,&c,1020,&now); press(&u,&c,1360,&now);
+    assert(c.qdb==126 && c.source==SOURCE_LOCAL && c.issued==3);
+    command(&u,&c,&probe,"profile set 1234abcd 20.00\n",now,"err lock\r\n");
+    assert(c.qdb==126 && c.issued==3);
+    command(&u,&c,&probe,"profile 22222222\n",now,"ok profile\r\n");
+    command(&u,&c,&probe,"profile set 1234abcd 20.00\n",now,"err lock\r\n");
+    command(&u,&c,&probe,"profile keep 1234abcd\n",now,"err lock\r\n");
+    command(&u,&c,&probe,"profile end 1234abcd\n",now,"err lock\r\n");
+    assert(c.qdb==126 && c.issued==3 && u.locked);
+    command(&u,&c,&probe,"profile set 22222222 0\n",now,"ok 0.00\r\n");
+    command(&u,&c,&probe,"profile end 22222222\n",now,"ok end\r\n");
+    command(&u,&c,&probe,"profile set 22222222 20\n",now,"err lock\r\n");
+    assert(!c.qdb && c.issued==4 && !u.locked);
+    command(&u,&c,&probe,"set 1.25\n",now,"ok 1.25\r\n");
+    command(&u,&c,&probe,"get\n",now,"1.25\r\n"); assert(c.issued==5);
 }
 static void frame(Screen *s,Display *d,uint32_t now) {
     for(uint32_t n=0;n<1200;++n) {
@@ -180,7 +219,7 @@ static void test_console_and_scheduling(void) {
     oled_cancel(&probe); frame(&u.screen,&d,0); assert(d.active);
 }
 int main(void) {
-    test_buttons(); test_lease(); test_display(); test_post_latch(); test_console_and_scheduling();
+    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();
     puts("UI: guarded ladder, median/debounce/release, clamping, post-latch state, leases/wrap, fixed OLED bytes and bounded alignment passed");
     return 0;
 }

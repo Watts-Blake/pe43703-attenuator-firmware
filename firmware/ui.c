@@ -6,18 +6,22 @@ static size_t reply(char out[16], const char *s) {
 static bool equal(const char *a, const char *b) {
     while (*a && *a==*b) { ++a; ++b; } return *a==*b;
 }
-static bool token_after(const char *s, const char *prefix, uint32_t *token) {
-    while (*prefix) if (*s++!=*prefix++) return false;
+static const char *token_prefix(const char *s, const char *prefix, uint32_t *token) {
+    while (*prefix) if (*s++!=*prefix++) return 0;
     uint32_t value=0;
     for (uint32_t i=0;i<8;++i) {
         char ch=*s++; uint32_t digit;
         if (ch>='0' && ch<='9') digit=(uint32_t)(ch-'0');
         else if (ch>='a' && ch<='f') digit=10u+(uint32_t)(ch-'a');
-        else return false;
+        else return 0;
         value=(value<<4)|digit;
     }
-    if (*s || !value) return false;
-    *token=value; return true;
+    if (!value) return 0;
+    *token=value; return s;
+}
+static bool token_after(const char *s, const char *prefix, uint32_t *token) {
+    const char *end=token_prefix(s,prefix,token);
+    return end && !*end;
 }
 static void reset_buttons(Ui *u) {
     u->used=0; u->next=0; u->candidate=KEY_UNKNOWN; u->candidate_at=0;
@@ -81,9 +85,21 @@ size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
                        Oled *probe, uint32_t now_ms, char ch, bool rx_error, char out[16]) {
     ui_expire(u,c,now_ms); ui_sync(u,c);
     if ((ch=='\r' || ch=='\n') && line->used && !line->discard && !rx_error) {
-        line->data[line->used]=0; const char *s=line->data; uint32_t token;
+        line->data[line->used]=0; const char *s=line->data; uint32_t token, qdb;
+        const char *value=token_prefix(s,"profile set ",&token);
         const char *answer=0;
-        if (equal(s,"profile")) answer="profile 1\r\n";
+        if (equal(s,"profile")) answer="profile 2\r\n";
+        else if (value && *value==' ' && parse_db(value+1,&qdb)) {
+            /* Expiry, token validation and latch share this main-loop dispatch;
+               no button action can interleave between validation and apply. */
+            if (!u->locked || u->token!=token) answer="err lock\r\n";
+            else {
+                (void)controller_set(c,qdb); oled_cancel(probe); ui_sync(u,c); line->used=0;
+                size_t n=reply(out,"ok "); format_db(c->qdb,out+n);
+                while (out[n]) ++n;
+                out[n++]='\r'; out[n++]='\n'; out[n]=0; return n;
+            }
+        }
         else if (token_after(s,"profile ",&token)) {
             if (u->locked) answer="err busy\r\n";
             else {

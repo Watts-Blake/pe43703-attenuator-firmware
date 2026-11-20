@@ -46,4 +46,4 @@ Emit one press per stable transition, require a debounced release before another
 
 Offline tests exercise every raw classification code, the observed plateaus, UNKNOWN 1092, short presses, held keys, release gating, pending/apply, all steps, clamping, external changes and lease expiry across timer wrap. ADC register models exercise calibration, conversion, cancellation and bounded faults without a delay loop in the automatic sampler. These are software checks, not hardware button or RF qualification.
 
-The separate [OLED observations and role probe](oled-probe.md) document working PA4–PA7 roles on two units. SSD1306-compatible column-zero rendering is observed, but actual silicon, chip-select wiring and panel supply arrangement remain unidentified; the probe does not affect ADC sampling.
+The separate [OLED observations and role probe](oled-probe.md) document working PA4–PA7 roles on two units. SSD1306-compatible column-zero rendering is observed, but actual silicon, chip-select wiring and panel supply arrangement remain unidentified. The role probe suspends automatic button ADC sampling; explicit raw `adc` / `diag adc` requests remain available.

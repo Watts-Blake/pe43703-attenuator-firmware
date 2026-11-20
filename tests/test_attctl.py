@@ -39,6 +39,7 @@ class Unit:
         self.port = os.ttyname(self.slave)
         self.mode, self.value, self.commands = mode, '0.00', []
         self.profile_capable, self.token, self.fail_keep = False, None, False
+        self.profile_version = b'profile 2\r\n'
         self.stop = threading.Event()
         self.worker = threading.Thread(target=self.serve, daemon=True)
         self.worker.start()
@@ -64,7 +65,14 @@ class Unit:
                 elif text == 'get':
                     reply = (self.value + '\r\n').encode()
                 elif self.profile_capable and text == 'profile':
-                    reply = b'profile 1\r\n'
+                    reply = self.profile_version
+                elif self.profile_capable and text.startswith('profile set '):
+                    _, _, token, value = text.split(' ')
+                    if token == self.token:
+                        self.value = value
+                        reply = ('ok ' + value + '\r\n').encode()
+                    else:
+                        reply = b'err lock\r\n'
                 elif self.profile_capable and text.startswith('profile keep '):
                     reply = b'ok keep\r\n' if text[13:] == self.token and not self.fail_keep else b'err lock\r\n'
                 elif self.profile_capable and text.startswith('profile end '):
@@ -168,6 +176,8 @@ class Tests(unittest.TestCase):
             self.assertEqual(commands[0], 'profile')
             self.assertTrue(commands[1].startswith('profile '))
             self.assertGreaterEqual(sum(c.startswith('profile keep ') for c in commands), 2)
+            self.assertTrue(any(c.startswith('profile set ') for c in commands))
+            self.assertFalse(any(c.startswith('set ') and c != 'set 0.00' for c in commands))
             self.assertTrue(commands[-1].startswith('profile end '))
             self.assertEqual(commands[-4:-1], ['!', 'set 0.00', 'get'])
 
@@ -176,7 +186,7 @@ class Tests(unittest.TestCase):
             unit.profile_capable = True
         self.units[1].fail_keep = True
         self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 1)
-        self.assertNotIn('set 2.00', self.units[1].commands)
+        self.assertFalse(any(c == 'set 2.00' or (c.startswith('profile set ') and c.endswith(' 2.00')) for c in self.units[1].commands))
         for unit in self.units:
             self.assertEqual(unit.value, '0.00')
             self.assertIsNone(unit.token)
@@ -186,8 +196,8 @@ class Tests(unittest.TestCase):
             unit.profile_capable = True
         self.units[1].token = 'foreign'
         self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 1)
-        self.assertNotIn('set 1.00', self.units[0].commands)
-        self.assertNotIn('set 2.00', self.units[1].commands)
+        self.assertFalse(any(c == 'set 1.00' or (c.startswith('profile set ') and c.endswith(' 1.00')) for c in self.units[0].commands))
+        self.assertFalse(any(c == 'set 2.00' or (c.startswith('profile set ') and c.endswith(' 2.00')) for c in self.units[1].commands))
         self.assertIsNone(self.units[0].token)
         self.assertEqual(self.units[1].token, 'foreign')
 
@@ -196,6 +206,16 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 0)
         self.assertIsNone(self.units[0].token)
         self.assertEqual(self.units[1].commands, ['profile', 'set 2.00', '!', 'set 0.00', 'get'])
+
+    def test_unrecognized_capability_never_falls_back_or_acquires(self):
+        for reply in (b'profile 1\r\n', b'profile 3\r\n', b'err lock\r\n', b'err\n'):
+            with self.subTest(reply=reply):
+                self.units[0].profile_capable = True
+                self.units[0].profile_version = reply
+                self.units[0].commands.clear()
+                self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 1)
+                self.assertEqual(self.units[0].commands, ['profile', '!', 'set 0.00', 'get'])
+                self.assertIsNone(self.units[0].token)
 
     def test_lost_lease_during_hold_stops_following_step(self):
         for unit in self.units:
@@ -207,8 +227,8 @@ class Tests(unittest.TestCase):
                 self.units[0].fail_keep = True
         with patch.object(a, 'emit', fail_after_step), patch.object(a, 'PROFILE_REFRESH', .02):
             self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .25}, {'A': '3.00', 'B': '4.00', 'duration': .05}]), 1)
-        self.assertNotIn('set 3.00', self.units[0].commands)
-        self.assertNotIn('set 4.00', self.units[1].commands)
+        self.assertFalse(any(c == 'set 3.00' or (c.startswith('profile set ') and c.endswith(' 3.00')) for c in self.units[0].commands))
+        self.assertFalse(any(c == 'set 4.00' or (c.startswith('profile set ') and c.endswith(' 4.00')) for c in self.units[1].commands))
         for unit in self.units:
             self.assertEqual(unit.value, '0.00')
             self.assertIsNone(unit.token)

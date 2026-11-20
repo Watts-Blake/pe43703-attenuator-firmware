@@ -257,7 +257,7 @@ class Serial:
         reply = self.exchange('profile')
         if reply == b'err\r\n':
             return None
-        if reply != b'profile 1\r\n':
+        if reply != b'profile 2\r\n':
             raise ValueError('invalid profile capability reply: ' + repr(reply))
         token = f'{int.from_bytes(os.urandom(4), "big") or 1:08x}'
         self.request('profile ' + token, 'ok profile')
@@ -265,6 +265,9 @@ class Serial:
 
     def profile_keep(self, token):
         self.request('profile keep ' + token, 'ok keep')
+
+    def profile_set(self, token, value):
+        return self.request('profile set ' + token + ' ' + value, 'ok ' + value)
 
     def profile_end(self, token):
         self.request('profile end ' + token, 'ok end')
@@ -384,7 +387,9 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
                     for label in labels:
                         if leases[label] is not None:
                             links[label].profile_keep(leases[label])
-                        actual[label] = links[label].set(step[label])
+                            actual[label] = links[label].profile_set(leases[label], step[label])
+                        else:
+                            actual[label] = links[label].set(step[label])
                         emit('applied', step=index, unit=label, value=actual[label], status='acknowledged')
                     started = time.monotonic()
                     emit('step', step=index, values=actual, duration=step['duration'], status='acknowledged')
