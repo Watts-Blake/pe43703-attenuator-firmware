@@ -2,6 +2,7 @@
 import ctypes
 import io
 import os
+import select
 import threading
 import time
 from pathlib import Path
@@ -441,6 +442,64 @@ sys.exit(bc.main(['--port', port, '--timeout', '.1']))
         finally:
             os.close(r)
             os.close(w)
+            unit.close()
+
+    def test_actual_cli_local_save_exits_with_console_reader_still_waiting(self):
+        ready = threading.Event()
+        real = self.lib
+        class ScheduledLibrary:
+            confirmed = False
+            def __getattr__(self, name):
+                return getattr(real, name)
+            def model_command(self, model, command, out):
+                if ready.is_set() and command == b'buttons status\n' and not self.confirmed:
+                    real.model_confirm(model)
+                    self.confirmed = True
+                real.model_command(model, command, out)
+        scheduled = ScheduledLibrary()
+        unit = FirmwareUnit(scheduled)
+        self.lib.model_automatic(unit.model)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                code = """
+import sys
+sys.path.insert(0, 'tools')
+import button_calibrate as bc
+from serial_port import Serial
+bc.Serial = lambda port: Serial(port, lock_path=sys.argv[2])
+sys.exit(bc.main(['--port', sys.argv[1], '--timeout', '.5']))
+"""
+                p = subprocess.Popen([sys.executable, '-u', '-c', code, unit.port, str(Path(tmp) / 'lock')],
+                                     cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    p.stdin.write(b'START\n')
+                    p.stdin.flush()
+                    output = b''
+                    end = time.monotonic() + 5
+                    while b'Type SAVE BUTTONS' not in output:
+                        remaining = end - time.monotonic()
+                        self.assertGreater(remaining, 0)
+                        self.assertTrue(select.select([p.stdout], [], [], remaining)[0])
+                        chunk = os.read(p.stdout.fileno(), 4096)
+                        self.assertTrue(chunk)
+                        output += chunk
+                    ready.set()
+                    # Keep stdin open and send no answer: the daemon reader is
+                    # still blocked when the actual CLI must close and exit.
+                    self.assertEqual(p.wait(timeout=3), 0, p.stderr.read())
+                    output += p.stdout.read()
+                    self.assertTrue(scheduled.confirmed)
+                    self.assertIn(b'Saved complete calibration', output)
+                    self.assertFalse(any(r[0] in ('buttons save', 'buttons cancel') for r in unit.records))
+                    self.assertTrue(all(qdb == 0 for _, _, qdb in unit.records))
+                finally:
+                    if p.poll() is None:
+                        p.kill()
+                        p.wait(timeout=2)
+                    p.stdin.close()
+                    p.stdout.close()
+                    p.stderr.close()
+        finally:
             unit.close()
 
     def test_actual_cli_normal_console_output_and_save(self):
