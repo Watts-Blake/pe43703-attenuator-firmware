@@ -102,7 +102,7 @@ static void test_console(void) {
     Model m; init(&m); Controller c; Bus bus={pe_pins,pe_delay,&m}; controller_boot(&c,bus);
     assert(c.qdb==0 && c.issued==1 && m.accesses==0);
     Line l={0}; feed(&l,&c,&m,"get\r\n","0.00\r\n");
-    feed(&l,&c,&m,"version\n","version 0.1.1\r\n"); assert(m.accesses==0 && c.issued==1);
+    feed(&l,&c,&m,"version\n","version 0.2.0\r\n"); assert(m.accesses==0 && c.issued==1);
     feed(&l,&c,&m,"set 20\n","ok 20.00\r\n"); assert(m.accesses==0);
     uint32_t events=m.pe_events, issued=c.issued;
     const char *bad[]={"ADC\n","adc \n","adc 1\n","diag adc 1\n","diag\n",
@@ -139,8 +139,33 @@ static void test_failures(void) {
         assert(!adc_sample(&bus,&result) && result==123 && m.writes==0);
     }
 }
+static void test_async(void) {
+    for (uint32_t failure=READY; failure<=EOC_STUCK; ++failure) {
+        Model m; init(&m); m.sample=2048; m.failure=failure; AdcIo bus=io(&m);
+        AdcAsync a={0}; uint32_t got=9999;
+        assert(adc_begin(&a,&bus,UINT32_MAX-10u));
+        assert(!adc_begin(&a,&bus,0));
+        int result=0;
+        while (!result && m.time<302) {
+            uint32_t before=m.time;
+            result=adc_poll(&a,&bus,UINT32_MAX-10u+m.time,&got);
+            assert(m.time==before); /* no blocking delay callbacks */
+            if (!result) ++m.time;
+        }
+        assert(result==(failure==READY ? 1 : -1));
+        assert(got==(failure==READY ? 2048u : 9999u)); clean(&m);
+    }
+    for (uint32_t cancel_at=0;cancel_at<4;++cancel_at) {
+        Model m; init(&m); AdcIo bus=io(&m); AdcAsync a={0}; uint32_t got;
+        assert(adc_begin(&a,&bus,0));
+        while (a.phase<=cancel_at) {
+            (void)adc_poll(&a,&bus,m.time,&got); ++m.time;
+        }
+        adc_cancel(&a,&bus); assert(!a.phase); clean(&m);
+    }
+}
 int main(void) {
-    test_values(); test_console(); test_failures();
+    test_values(); test_console(); test_failures(); test_async();
     puts("ADC: actual single-shot register sequence, all4096 values, inactive default, bounded faults, UART recovery and unchanged RF state passed");
     return 0;
 }

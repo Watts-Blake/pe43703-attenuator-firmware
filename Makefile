@@ -6,8 +6,10 @@ CFLAGS = -std=c11 -Os -g3 -Wall -Wextra -Werror -Wconversion -ffreestanding -fno
 all: build/attenuator.elf build/attenuator.bin build/attenuator.hex build/bootloader.bin build/bootloader.hex build/combined.bin build/combined.hex
 build:
 	mkdir -p build
-build/attenuator.elf: firmware/core.c firmware/core.h firmware/version.h firmware/adc.c firmware/adc.h firmware/oled.c firmware/oled.h firmware/layout.h firmware/target.c firmware/startup.S firmware/stm32f103c8.ld | build
-	$(CROSS)gcc $(CFLAGS) -nostdlib -Wl,--gc-sections,-Map=build/attenuator.map -Tfirmware/stm32f103c8.ld firmware/startup.S firmware/target.c firmware/core.c firmware/adc.c firmware/oled.c -o $@
+APP_SOURCES = firmware/target.c firmware/core.c firmware/adc.c firmware/oled.c firmware/screen.c firmware/ui.c
+APP_HEADERS = firmware/core.h firmware/version.h firmware/adc.h firmware/oled.h firmware/screen.h firmware/ui.h firmware/layout.h
+build/attenuator.elf: $(APP_SOURCES) $(APP_HEADERS) firmware/startup.S firmware/stm32f103c8.ld | build
+	$(CROSS)gcc $(CFLAGS) -nostdlib -Wl,--nmagic,--gc-sections,-Map=build/attenuator.map -Tfirmware/stm32f103c8.ld firmware/startup.S $(APP_SOURCES) -o $@
 build/attenuator.bin: build/attenuator.elf
 	$(CROSS)objcopy -O binary $< $@
 build/attenuator.hex: build/attenuator.elf
@@ -15,7 +17,7 @@ build/attenuator.hex: build/attenuator.elf
 build/test_core: tests/test_core.c firmware/core.c firmware/core.h firmware/version.h | build
 	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_core.c firmware/core.c -o $@
 build/bootloader.elf: firmware/boot_core.c firmware/boot_core.h firmware/layout.h firmware/boot_target.c firmware/startup.S firmware/bootloader.ld | build
-	$(CROSS)gcc $(CFLAGS) -nostdlib -Wl,--gc-sections,-Map=build/bootloader.map -Tfirmware/bootloader.ld firmware/startup.S firmware/boot_target.c firmware/boot_core.c -o $@
+	$(CROSS)gcc $(CFLAGS) -nostdlib -Wl,--nmagic,--gc-sections,-Map=build/bootloader.map -Tfirmware/bootloader.ld firmware/startup.S firmware/boot_target.c firmware/boot_core.c -o $@
 build/bootloader.bin: build/bootloader.elf
 	$(CROSS)objcopy -O binary $< $@
 build/bootloader.hex: build/bootloader.elf
@@ -30,11 +32,14 @@ build/test_adc: tests/test_adc.c firmware/adc.c firmware/adc.h firmware/core.c f
 	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_adc.c firmware/adc.c firmware/core.c -o $@
 build/test_oled: tests/test_oled.c firmware/oled.c firmware/oled.h firmware/adc.c firmware/adc.h firmware/core.c firmware/core.h firmware/version.h | build
 	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_oled.c firmware/oled.c firmware/adc.c firmware/core.c -o $@
-test: all build/test_core build/test_boot build/test_adc build/test_oled
+build/test_ui: tests/test_ui.c firmware/ui.c firmware/screen.c firmware/oled.c firmware/adc.c firmware/core.c $(APP_HEADERS) | build
+	$(CC_HOST) -std=c11 -O2 -g -Wall -Wextra -Werror -Wconversion -Ifirmware tests/test_ui.c firmware/ui.c firmware/screen.c firmware/oled.c firmware/adc.c firmware/core.c -o $@
+test: all build/test_core build/test_boot build/test_adc build/test_oled build/test_ui
 	./build/test_boot
 	./build/test_core
 	./build/test_adc
 	./build/test_oled
+	./build/test_ui
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py' -v
 inspect: all
 	$(PYTHON) tools/inspect_image.py build/attenuator.elf

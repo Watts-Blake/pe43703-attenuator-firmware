@@ -41,6 +41,18 @@ static void byte(Oled *p, uint8_t value, bool data) {
     levels(p,base|p->control); /* CS inactive, or RES remains high */
     p->bus.delay_us(p->bus.context,1);
 }
+void oled_write(Oled *p, uint8_t value, bool data) { byte(p,value,data); }
+void oled_fixed_begin(Oled *p) {
+    p->index=41; p->clk=1u<<6; p->si=1u<<7; p->dc=1u<<5; p->control=1u<<4;
+    p->bus.begin(p->bus.context,0); p->configured=true;
+    p->bus.delay_us(p->bus.context,10); levels(p,p->control);
+    p->bus.delay_us(p->bus.context,10);
+}
+bool oled_fixed_init(Oled *p, uint32_t cursor) {
+    if (cursor>=sizeof(ssd_init)) return true;
+    byte(p,ssd_init[cursor],false);
+    return cursor+1u==sizeof(ssd_init);
+}
 void oled_init(Oled *p, OledBus bus) {
     p->bus=bus; p->active=false; p->configured=false; p->index=0;
 }

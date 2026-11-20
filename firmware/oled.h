@@ -20,6 +20,10 @@ void oled_init(Oled *p, OledBus bus);
 bool oled_mapping(uint32_t index, uint8_t pins[4]); /* SCK,MOSI,DC,CS/RES */
 bool oled_start(Oled *p, uint32_t now_ms);
 void oled_cancel(Oled *p);
+/* Fixed observed PA6/7/5/4 reset-mode bus, SSD1306-compatible column zero. */
+void oled_fixed_begin(Oled *p);
+bool oled_fixed_init(Oled *p, uint32_t cursor);
+void oled_write(Oled *p, uint8_t value, bool data);
 /* One byte/control transition per call; never waits for a hold deadline.
    can_report requires16 free TX bytes. Deadline cleanup runs even when false. */
 size_t oled_poll(Oled *p, uint32_t now_ms, char out[16], bool can_report);

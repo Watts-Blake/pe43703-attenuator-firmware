@@ -2,7 +2,7 @@
 
 **Display changes but attenuation doesn't? USB/serial commands have no effect, the PC software doesn't work, or the `wv` command gets no reply?** This project develops replacement firmware for a LiebeWH-style OLED digital programmable attenuator: the aluminium, SMA-to-SMA, STM32F103C8T6 + PE43703 board listed as a USB-programmable 0–31.75 dB, 0.25 dB-step, 6 GHz digital RF attenuator.
 
-**Status: the current loader/app image passed SWD flash, independent verification, USB serial commands and one same-image USB app update on one examined unit.** [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0) include combined, app-only and loader BIN/HEX files plus checksums. Display/buttons remain unsupported. These results do not establish compatibility with every similar board or calibrated RF performance. The advertised frequency range is a product description, not a measured claim.
+**Status: the published v0.1.0 loader/app image passed SWD flash, independent verification, USB serial commands and one same-image USB app update on one examined unit.** [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0) include combined, app-only and loader BIN/HEX files plus checksums. The v0.2.0 candidate adds the normal screen and front buttons with offline coverage only; the published v0.1.0 images omit them. These results do not establish compatibility with every similar board or calibrated RF performance. The advertised frequency range is a product description, not a measured claim.
 
 In earlier SWD-mailbox tests of the preceding app image, a phone reported about −85 dBm RSRP before a 20.00 dB command, then −103 dBm about 5 and 15 seconds afterward. After the zero command it returned to −85 dBm at both follow-up samples. This roughly 18 dB reported change supports control with SI=PB11, CLK=PB12, LE=PB13. Phone RSRP and the test enclosure do not establish calibrated attenuation accuracy, insertion loss or performance across the advertised frequency range.
 
@@ -44,14 +44,14 @@ The text format comes from static inspection of the bundled tool in [att6000_con
 - Boot requests and latches the **0.00 dB command** before accepting commands. This does not establish physical 0 dB or remove the PE43703's inherent insertion loss.
 - An 8 KiB UART bootloader at `0x08000000`; application at `0x08002000`, CRC commit page at `0x0800fc00`. App-only USB updates cannot address loader pages. See [USB update instructions](docs/usb-update.md).
 - USART1 on PA9/PA10, 115200 8N1: `set <dB>` replies `ok <dB>` after the complete serial transaction; `get` returns the last command issued. Neither is RF readback.
-- PE43703 address zero, full 16-bit frame, quarter-dB steps, LSB first, rising CLK sampling and an LE pulse. No display or button driver in v1; use the display detached for initial qualification. PA4–PA7 stay at reset input levels unless the development OLED probe is explicitly requested.
+- PE43703 address zero, full 16-bit frame, quarter-dB steps, LSB first, rising CLK sampling and an LE pulse. The v0.2.0 candidate uses the observed fixed OLED mapping and PA1 button ladder. Boot zero precedes screen initialization. See [display, pending/apply buttons and profile precedence](docs/design.md#applied-state-display-and-local-control). Published v0.1.0 omits display/buttons.
 - Normal operation uses mapping 0: SI=PB11, CLK=PB12, LE=PB13. Boot always selects it; the production UART interface cannot change it. Alternative mappings remain available only through the SWD debug mailbox with explicit `--debug-select`. Read status before testing; GPIO-to-chip continuity remains untraced.
 - Assumed 8 MHz HSE crystal → 72 MHz CPU/APB2, 36 MHz APB1. HSE is a design assumption, not a measured oscillator frequency. Clock startup fails closed with a readable mailbox fault; no attenuation command is accepted in that state.
 
-| Pins | v1 use | Qualification |
+| Pins | Use | Qualification |
 | --- | --- | --- |
 | PB11/PB12/PB13 | SI/CLK/LE in selectable order | Mapping 0 functionally tested on one unit; connections not continuity-traced |
-| PA4–PA7 | Inputs by default; opt-in OLED role probe | Display roles remain unqualified; see [probe profile](docs/oled-probe.md) |
+| PA4–PA7 | v0.2.0 OLED: PA6 SCK, PA7 MOSI, PA5 D/C, PA4 RES | Column-zero SSD1306-compatible rendering observed on two units; see [probe observations](docs/oled-probe.md#observed-wiring-on-two-units) |
 | PA9 / PA10 | USART1 TX / RX | CH340 command/reply and app update tested on one unit; traces not continuity-checked |
 | PA13 / PA14 | SWDIO / SWCLK | Preserve SWD; no debug-port remap |
 
@@ -88,11 +88,11 @@ ok 0.00
 
 Commands accept CR, LF or CRLF. Values must be 0–31.75 dB in exact 0.25 dB steps, with one or two digits before the optional decimal point and up to two after it. Attenuation responses always use two decimal places and CRLF. Invalid syntax, range, overlong input or UART errors return `err` at the line boundary without applying that line. A partial line occupies at most 31 bytes and waits for its terminator. An overlong/bad line is discarded through its terminator; then a fresh command can be sent. There is no command echo, unsolicited boot banner or persistent setting storage.
 
-**v0.1.1 development diagnostic:** `adc` (alias `diag adc`) returns one raw PA1 sample as `adc NNNN\r\n`, or `err adc\r\n` on a bounded ADC failure. It is inactive until requested and does not change attenuation. This addition is offline-tested and absent from the published v0.1.0 images; button thresholds and the display interface remain unqualified. `version` reports `version 0.1.1`. See [input diagnostics](docs/diagnostics.md). `oledprobe` starts a finite visual role sweep with indexed USB output; a valid SET cancels it. See [exact trial mapping and limits](docs/oled-probe.md).
+**Input diagnostics (introduced in v0.1.1):** `adc` (alias `diag adc`) returns one raw PA1 sample as `adc NNNN\r\n`, or `err adc\r\n` on a bounded ADC failure. It is inactive until requested and does not change attenuation. This addition is offline-tested and absent from the published v0.1.0 images; two-unit [button ladder observations and candidate unqualified bands](docs/diagnostics.md#observed-pa1-front-button-ladder) are documented separately. `version` reports `version 0.2.0` in the current candidate. See [input diagnostics](docs/diagnostics.md). `oledprobe` starts a finite visual role sweep with indexed USB output; a valid SET cancels it. See [exact trial mapping and limits](docs/oled-probe.md).
 
 **Observed on one unit:** `get` returned `0.00\r\n`; `set 20.00` returned `ok 20.00\r\n`. After a monotonic 20-second hold, `set 0` returned `ok 0.00\r\n` and `get` returned `0.00\r\n`, with the display/button board connected.
 
-**USB updates:** the CH340 is a USB-to-UART bridge. One same-image, 2,156-byte app update passed through the UART loader in 34 chunks, with CRC-completion acknowledgment and `get` returning zero after app start. This exercised the update path, without a version change or independent post-update SWD readback. CRC detects corruption; it is not authentication. After initial SWD installation, use the [app-only update guide](docs/usb-update.md). Keep SWD access until command and app-update checks pass on the particular unit.
+**USB updates:** the CH340 is a USB-to-UART bridge. One same-image, 2,156-byte app update passed through the UART loader in 34 chunks, with CRC-completion acknowledgment and `get` returning zero after app start. This exercised the update path, without a version change or independent post-update SWD readback. CRC detects corruption; it is not authentication. After initial SWD installation, use the [app-only update guide](docs/usb-update.md). A later [v0.1.0-to-v0.1.1 update](docs/usb-update.md#v010-compatibility-and-validation) succeeded using `get` → `bootloader`; v0.1.0 has no `version` query. Keep SWD access until command and app-update checks pass on the particular unit.
 
 ## FAQ
 
@@ -106,7 +106,7 @@ No backup is available. Removing STM32F1 read protection erases the original fir
 
 ### Will the OLED and five buttons work?
 
-Published v0.1.0 omits display/button support and makes no writes on PA4–PA7. Development diagnostics add an explicit [OLED role probe](docs/oled-probe.md); ordinary operation still leaves the display idle and buttons inert. Initial SWD tests used a detached display; USB qualification passed with the display/button board reconnected. The display interface has not been identified.
+Published v0.1.0 omits display/buttons. The v0.2.0 candidate adds a fixed SSD1306-compatible screen showing APPLIED, PENDING, STEP, source and lock status. PLUS/MINUS edit pending attenuation, OK applies, and LEFT/RIGHT cycle the 0.25/1/5 dB step; values clamp at 0.00–31.75 dB. An active [USB profile lease](docs/attctl.md#firmware-profile-leases) suppresses local actions. New firmware behavior is offline-tested only; [two-unit OLED compatibility](docs/oled-probe.md#observed-wiring-on-two-units) and [PA1 codes](docs/diagnostics.md#observed-pa1-front-button-ladder) do not qualify thresholds or RF performance. `oledtest` is a bounded fixed-pattern alignment diagnostic; `oledprobe` retains the opt-in role sweep. See [complete control semantics](docs/design.md#applied-state-display-and-local-control).
 
 ### Is `get` a measurement?
 

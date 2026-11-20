@@ -19,6 +19,7 @@ import time
 
 LOCK_PATH = '/run/lock/attctl.lock'
 MAX_FILE = 65536
+PROFILE_REFRESH = 1.0
 
 
 def db(value):
@@ -217,7 +218,7 @@ class Serial:
                 raise OSError('serial disconnected')
             data = data[n:]
 
-    def request(self, command, expected=None):
+    def exchange(self, command):
         deadline = time.monotonic() + self.timeout
         self.write(command.encode('ascii') + b'\n', deadline)
         response = bytearray()
@@ -236,6 +237,10 @@ class Serial:
                 raise ValueError('oversized serial reply')
         self.check()
         reply = bytes(response)
+        return reply
+
+    def request(self, command, expected=None):
+        reply = self.exchange(command)
         if expected is not None:
             if reply != expected.encode('ascii') + b'\r\n':
                 raise ValueError('reply mismatch: ' + repr(reply))
@@ -246,6 +251,26 @@ class Serial:
 
     def set(self, value):
         return self.request('set ' + value, 'ok ' + value)
+
+    def profile_start(self):
+        # Old apps explicitly reject this side-effect-free capability query.
+        reply = self.exchange('profile')
+        if reply == b'err\r\n':
+            return None
+        if reply != b'profile 2\r\n':
+            raise ValueError('invalid profile capability reply: ' + repr(reply))
+        token = f'{int.from_bytes(os.urandom(4), "big") or 1:08x}'
+        self.request('profile ' + token, 'ok profile')
+        return token
+
+    def profile_keep(self, token):
+        self.request('profile keep ' + token, 'ok keep')
+
+    def profile_set(self, token, value):
+        return self.request('profile set ' + token + ' ' + value, 'ok ' + value)
+
+    def profile_end(self, token):
+        self.request('profile end ' + token, 'ok end')
 
     def zero(self):
         self.check()
@@ -338,6 +363,7 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
     resolver = resolver or Resolver(devices)
     labels = ('A', 'B') if steps is not None or target == 'both' else (target,)
     links, failed = {}, False
+    leases = {}
     error, reports = None, []
     with locked(lock_path):
         handlers = {s: signal.signal(s, interrupt) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
@@ -352,16 +378,30 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
                     actual = links[label].set(value) if action == 'set' else links[label].request('get')
                     emit('applied' if action == 'set' else 'read', unit=label, value=actual, status='acknowledged')
             else:
+                # Acquire both before any profile attenuation command. Legacy
+                # firmware has inert buttons and returns err to the query.
+                for label in labels:
+                    leases[label] = links[label].profile_start()
                 for index, step in enumerate(steps):
                     actual = {}
                     for label in labels:
-                        actual[label] = links[label].set(step[label])
+                        if leases[label] is not None:
+                            links[label].profile_keep(leases[label])
+                            actual[label] = links[label].profile_set(leases[label], step[label])
+                        else:
+                            actual[label] = links[label].set(step[label])
                         emit('applied', step=index, unit=label, value=actual[label], status='acknowledged')
                     started = time.monotonic()
                     emit('step', step=index, values=actual, duration=step['duration'], status='acknowledged')
                     # Start each duration after both acks; late steps never catch up.
                     deadline = started + step['duration']
+                    refresh = started + PROFILE_REFRESH
                     while time.monotonic() < deadline:
+                        if time.monotonic() >= refresh:
+                            for label in labels:
+                                if leases[label] is not None:
+                                    links[label].profile_keep(leases[label])
+                            refresh = time.monotonic() + PROFILE_REFRESH
                         time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     emit('held', step=index, elapsed=time.monotonic() - started)
         except Exception as exc:
@@ -382,6 +422,16 @@ def run(devices, target, action=None, value=None, steps=None, resolver=None, loc
                         reports.append(('cleanup', {'unit': label, 'status': 'failed', 'error': str(exc)}))
                     else:
                         reports.append(('cleanup', {'unit': label, 'value': '0.00', 'status': 'zero_confirmed'}))
+            # Complete both independent zero attempts before releasing either
+            # firmware lease; expiration also bounds disconnect/SIGKILL locks.
+            for label, token in leases.items():
+                if token is None:
+                    continue
+                try:
+                    links[label].profile_end(token)
+                except Exception as exc:
+                    failed = True
+                    reports.append(('unlock', {'unit': label, 'status': 'failed', 'error': str(exc)}))
             for label, link in links.items():
                 try:
                     link.close()

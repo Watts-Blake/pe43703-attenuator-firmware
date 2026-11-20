@@ -1,6 +1,7 @@
 #include "core.h"
 #include "adc.h"
 #include "oled.h"
+#include "ui.h"
 #include "layout.h"
 #define REG(address) (*(volatile uint32_t *)(address))
 #define RCC_CR REG(0x40021000u)
@@ -89,7 +90,7 @@ void Reset_Handler(void) {
     (void)RCC_APB2ENR;
     pins(0, 0); /* preload low before enabling output drivers */
     GPIOB_CRH = (GPIOB_CRH & ~0x00fff000u) | 0x00222000u; /* PB11..13 2 MHz PP */
-    /* PA4..7 stay reset inputs until an explicit OLED probe command. */
+    /* Normal display uses the observed PA6/7/5/4 reset-mode wiring. */
     Controller controller;
     Bus bus = { pins, delay_us, 0 };
     delay_us(0, 1000); /* allow peripheral power-up; does not prove power good */
@@ -104,6 +105,7 @@ void Reset_Handler(void) {
     OledSaved saved; Oled oled;
     const OledBus display={oled_begin,oled_pins,oled_end,delay_us,&saved};
     oled_init(&oled,display);
+    Ui ui; ui_init(&ui,&controller,display);
     TxQueue tx; tx.read=0; tx.write=0; tx.used=0;
     uint32_t last_ticks=SYST_CVR, fraction=0, now_ms=0;
     for (;;) {
@@ -117,12 +119,16 @@ void Reset_Handler(void) {
         if (!line.bootloader && tx.used<=48 && (sr & ((1u << 5) | 15u))) {
             char ch = (char)USART_DR; /* SR then DR clears RXNE and receive errors */
             char out[16];
-            size_t n = probe_console_feed(&line,&controller,&adc,&oled,now_ms,ch,(sr & 15u)!=0,out);
+            size_t n = ui_console_feed(&ui,&line,&controller,&adc,&oled,now_ms,ch,(sr & 15u)!=0,out);
             mailbox_publish(&mailbox, &controller);
             if (!tx_push(&tx,out,n)) park();
         }
         if (!line.bootloader) {
             char out[16]; size_t n=oled_poll(&oled,now_ms,out,tx.used<=48);
+            if (!tx_push(&tx,out,n)) park();
+            uint32_t before_ui=controller.issued;
+            n=ui_poll(&ui,&controller,&adc,&oled,now_ms,now_ms*1000u+fraction/72u,out,tx.used<=48);
+            if (controller.issued!=before_ui) mailbox_publish(&mailbox,&controller);
             if (!tx_push(&tx,out,n)) park();
         }
         char outgoing;
