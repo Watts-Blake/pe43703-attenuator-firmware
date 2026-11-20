@@ -80,3 +80,22 @@ void model_legacy_command(void *ctx,const char *s,char *out) {
     while(*s)(void)line_feed(&m->line,&m->c,*s++,false,out);
 }
 uint32_t model_applied(void *ctx) { return ((Model *)ctx)->c.qdb; }
+
+/* Scheduling boundaries around real ADC/UI confirmation, before journal poll. */
+void model_captured(void *ctx) {
+    Model *m=ctx;
+    assert(m->ui.calibration.phase==CAL_HOLD);
+    static const uint32_t values[5]={3900,2500,1700,500,1100};
+    for(uint32_t i=0;i<5;++i) {
+        model_hold(m,values[i],350);model_hold(m,0,120);
+    }
+    assert(m->ui.calibration.phase==CAL_CONFIRM);
+}
+void model_confirm(void *ctx) {
+    Model *m=ctx;
+    assert(m->ui.calibration.phase==CAL_CONFIRM);
+    for(uint32_t i=0;i<101;++i) {m->now+=10;ui_button_sample(&m->ui,&m->c,1100,m->now);}
+    for(uint32_t i=0;i<11;++i) {m->now+=10;ui_button_sample(&m->ui,&m->c,0,m->now);}
+    assert(m->ui.calibration.phase==CAL_SAVING);
+    assert(m->ui.identification.config.writing && !m->ui.identification.config.calibrated);
+}

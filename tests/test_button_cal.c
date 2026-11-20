@@ -57,10 +57,16 @@ static void test_complete_and_confirm(void) {
             samples(&b,&c,&s,&now,0,11);
         } else command(&b,&c,&s,now,"buttons save","ok saving\r\n");
         assert(b.phase==CAL_SAVING && c.writing);
+        command(&b,&c,&s,now,"buttons save","ok saving\r\n");
+        assert(!m.writes && c.writing);
         for(uint32_t i=0;i<16;++i)button_cal_poll(&b,&c,&s,now);
         assert(!b.active && b.result==CAL_SAVED && !s.calibrating && c.calibrated && m.writes==16);
         assert(!memcmp(c.buttons,values,sizeof(values)) && c.index==41 && config_remaining(&c)==60);
         command(&b,&c,&s,now,"buttons stored L","value L 3900\r\n");
+        command(&b,&c,&s,now,"buttons value O","value O 1100\r\n");
+        command(&b,&c,&s,now,"buttons save","ok saving\r\n");
+        command(&b,&c,&s,now,"buttons status","saved\r\n");
+        assert(m.writes==16 && !c.writing);
         DisplayConfig reboot;ConfigIo io={read_byte,program,&m};config_init(&reboot,io);
         assert(reboot.calibrated && !memcmp(reboot.buttons,values,sizeof(values)));
     }

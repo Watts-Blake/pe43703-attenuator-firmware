@@ -1,6 +1,9 @@
 """Portable wizard prompts and real production ADC/UI/config paths over PTYs."""
 import ctypes
 import io
+import os
+import threading
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -38,7 +41,7 @@ class ScriptedLink:
         elif op == 'buttons start':
             result = b'ok buttons\r\n'
         elif op == 'buttons status':
-            result = b'saved\r\n' if self.saved else next(self.states)
+            result = b'saved\r\n' if self.saved else next(self.states, b'confirm\r\n')
         elif op.startswith(('buttons value ', 'buttons stored ')):
             key = op[-1]
             result = f'value {key} {VALUES[bc.KEYS.index(key)]:04d}\r\n'.encode()
@@ -198,6 +201,25 @@ class InteractionTests(unittest.TestCase):
         session.cancel()
         self.assertTrue(all(0 < s <= 5 for s in budgets))
         self.assertEqual(link.commands.count(b'buttons save\n'), 1)
+        self.assertNotIn(b'buttons cancel\n', link.commands)
+
+    def test_lost_completion_and_readback_error_never_cancel_or_replay_save(self):
+        for failed in (b'buttons status\n', b'buttons stored L\n'):
+            link = ScriptedLink()
+            original = link.request
+            def lost(command, expected=None, seconds=2):
+                if link.saved and command == failed:
+                    link.failed = True
+                    link.commands.append(command)
+                    raise TimeoutError('Save completion/readback unknown')
+                return original(command, expected, seconds)
+            link.request = lost
+            session = self.session(link)
+            with self.assertRaisesRegex(TimeoutError, 'unknown'):
+                session.run()
+            session.cancel()
+            self.assertEqual(link.commands.count(b'buttons save\n'), 1)
+            self.assertNotIn(b'buttons cancel\n', link.commands)
 
     def test_on_device_explicit_confirmation_reads_and_prints_saved_values(self):
         link = ScriptedLink()
@@ -236,7 +258,7 @@ class ProductionButtonTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         display_tests.ProductionPtyTests.setUpClass.__func__(cls)
-        for name in ('model_reboot', 'model_automatic', 'model_pending', 'model_future'):
+        for name in ('model_reboot', 'model_automatic', 'model_pending', 'model_future', 'model_captured', 'model_confirm'):
             getattr(cls.lib, name).argtypes = [ctypes.c_void_p]
         cls.lib.model_reboot.restype = cls.lib.model_automatic.restype = None
         cls.lib.model_future.restype = None
@@ -282,6 +304,167 @@ class ProductionButtonTests(unittest.TestCase):
                 self.assertEqual(link.request(b'get\n'), b'0.25\r\n')
                 self.assertTrue(any('median 3900' in m for m in messages))
             self.assertFalse(unit.errors)
+        finally:
+            unit.close()
+
+    def test_local_save_progress_and_confirmation_races(self):
+        from serial_port import Serial
+        # Stop at production boundaries: never manufacture firmware state/replies.
+        for timing in ('before-status', 'during-values', 'before-prompt', 'during-prompt', 'cancel-race', 'save-race'):
+            with self.subTest(timing=timing):
+                unit = FirmwareUnit(self.lib)
+                asked = threading.Event()
+                release = threading.Event()
+                try:
+                    with tempfile.TemporaryDirectory() as tmp, Serial(unit.port, lock_path=str(Path(tmp) / 'lock')) as link:
+                        outer = self
+                        class Schedule:
+                            confirmed = False
+                            @property
+                            def failed(self):
+                                return link.failed
+                            def request(self, command, expected=None, seconds=2):
+                                if (timing in ('during-prompt', 'cancel-race') and asked.is_set()
+                                        and command in (b'buttons status\n', b'buttons save\n', b'buttons cancel\n') and not self.confirmed):
+                                    outer.lib.model_confirm(unit.model)
+                                    self.confirmed = True
+                                if timing == 'save-race' and command == b'buttons save\n':
+                                    outer.lib.model_confirm(unit.model)
+                                result = link.request(command, expected, seconds=seconds)
+                                if timing == 'during-values' and command == b'buttons value L\n':
+                                    outer.lib.model_confirm(unit.model)
+                                    # The ordinary production bridge finishes journal polls.
+                                    link.request(b'buttons status\n', b'saving\r\n')
+                                if command == b'buttons start\n':
+                                    outer.lib.model_hold(unit.model, 0, 120)
+                                    outer.lib.model_captured(unit.model)
+                                    if timing == 'before-status':
+                                        outer.lib.model_confirm(unit.model)
+                                if timing == 'before-prompt' and command == b'buttons value O\n':
+                                    outer.lib.model_confirm(unit.model)
+                                return result
+                        calls = []
+                        def ask(prompt, seconds):
+                            calls.append(prompt)
+                            if len(calls) == 1:
+                                return 'START'
+                            asked.set()
+                            if timing == 'cancel-race':
+                                return 'cancel'
+                            if timing != 'save-race':
+                                release.wait(3)
+                            return 'SAVE BUTTONS'
+                        messages = []
+                        session = bc.Calibration(Schedule(), .5, ask=ask, output=messages.append, sleep=lambda s: None)
+                        try:
+                            try:
+                                session.run()
+                            except InterruptedError:
+                                if timing != 'cancel-race':
+                                    raise
+                        finally:
+                            session.cancel()
+                        self.assertEqual(link.request(b'buttons get\n'), b'buttons saved\r\n')
+                        if timing != 'save-race':
+                            self.assertTrue(any(r[1] == b'saving\r\n' for r in unit.records))
+                        else:
+                            self.assertIn(('buttons save', b'ok saving\r\n', 0), unit.records)
+                        self.assertFalse(any(r[0] == 'buttons cancel' for r in unit.records))
+                        self.assertEqual(sum(r[0] == 'buttons save' for r in unit.records), int(timing == 'save-race'))
+                        link.request(b'display get\n', b'config 41 60\r\n')
+                        self.assertTrue(all(qdb == 0 for _, _, qdb in unit.records))
+                        self.assertFalse(unit.errors)
+                        if timing != 'cancel-race':
+                            self.assertTrue(any('median 3900' in m for m in messages))
+                finally:
+                    release.set()
+                    unit.close()
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux pipe/lock observation; other hardware platforms UNRUN')
+    def test_actual_cli_full_stdout_releases_port_and_lock_without_drain(self):
+        from serial_port import Serial
+        unit = FirmwareUnit(self.lib)
+        # A real blocking pipe: setting O_NONBLOCK on a shared writer then leaving
+        # it set would invalidate the pressure observation.
+        r, w = os.pipe()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                lock = str(Path(tmp) / 'lock')
+                code = r"""
+import os, sys
+sys.path.insert(0, 'tools')
+import button_calibrate as bc
+from serial_port import Serial
+bc.SESSION_SECONDS = .15
+port, lock = sys.argv[1:]
+def serial(port):
+    link = Serial(port, lock_path=lock)
+    original = link.request
+    def request(command, expected=None, seconds=2):
+        result = original(command, expected, seconds=seconds)
+        if command == b'buttons start\n':
+            # Fill after START on the same blocking descriptor as the reporter.
+            os.set_blocking(1, False)
+            try:
+                while True: os.write(1, b'x' * 4096)
+            except BlockingIOError:
+                pass
+            finally:
+                os.set_blocking(1, True)
+        return result
+    link.request = request
+    return link
+bc.Serial = serial
+sys.exit(bc.main(['--port', port, '--timeout', '.1']))
+"""
+                p = subprocess.Popen([sys.executable, '-u', '-c', code, unit.port, lock],
+                                     cwd=ROOT, stdin=subprocess.PIPE, stdout=w, stderr=subprocess.PIPE)
+                try:
+                    p.stdin.write(b'START\n')
+                    p.stdin.flush()
+                    started = time.monotonic()
+                    # Never drain stdout until the child has exited and released.
+                    self.assertEqual(p.wait(timeout=3), 1)
+                    self.assertLess(time.monotonic() - started, 2)
+                    self.assertIn(b'Console blocked', p.stderr.read())
+                    self.assertTrue(any(r[0] == 'buttons start' for r in unit.records))
+                    self.assertTrue(any(r[0] == 'buttons cancel' for r in unit.records))
+                    with Serial(unit.port, lock_path=lock) as link:
+                        link.request(b'buttons get\n', b'buttons none\r\n')
+                    self.assertTrue(all(qdb == 0 for _, _, qdb in unit.records))
+                finally:
+                    if p.poll() is None:
+                        p.kill()
+                        p.wait(timeout=2)
+                    p.stdin.close()
+                    p.stderr.close()
+        finally:
+            os.close(r)
+            os.close(w)
+            unit.close()
+
+    def test_actual_cli_normal_console_output_and_save(self):
+        unit = FirmwareUnit(self.lib)
+        self.lib.model_automatic(unit.model)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                code = """
+import sys
+sys.path.insert(0, 'tools')
+import button_calibrate as bc
+from serial_port import Serial
+bc.Serial = lambda port: Serial(port, lock_path=sys.argv[2])
+sys.exit(bc.main(['--port', sys.argv[1], '--timeout', '.5']))
+"""
+                p = subprocess.run([sys.executable, '-u', '-c', code, unit.port, str(Path(tmp) / 'lock')],
+                                   cwd=ROOT, input=b'START\nSAVE BUTTONS\n', capture_output=True, timeout=8)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn(b'Type START', p.stdout)
+                self.assertIn(b'Type SAVE BUTTONS', p.stdout)
+                for value in VALUES:
+                    self.assertIn(f'median {value:04d}'.encode(), p.stdout)
+                self.assertTrue(any(r[0] == 'buttons save' for r in unit.records))
+                self.assertFalse(any(r[0] == 'buttons cancel' for r in unit.records))
         finally:
             unit.close()
 

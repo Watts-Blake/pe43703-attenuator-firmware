@@ -152,7 +152,8 @@ size_t button_cal_command(ButtonCal *b,DisplayConfig *c,Screen *s,const char *co
         const char *key=op+(captured ? 6 : 7);
         if (key[0] && !key[1]) for (uint32_t i=0;i<BUTTON_COUNT;++i) if (key[0]==codes[i]) {
             if (stored && c->calibrated) return value_reply(out,i,c->buttons[i]);
-            if (captured && b->active && (i<b->index || (i==b->index && b->phase==CAL_VALUE)))
+            if (captured && (b->active || b->result==CAL_SAVED) &&
+                (i<b->index || (i==b->index && b->phase==CAL_VALUE)))
                 return value_reply(out,i,b->values[i]);
         }
         if (stored) return reply(out,"err config\r\n");
@@ -163,6 +164,10 @@ size_t button_cal_command(ButtonCal *b,DisplayConfig *c,Screen *s,const char *co
         button_cal_init(b); b->active=true; b->started=now; b->touched=now;
         show(b,s); return reply(out,"ok buttons\r\n");
     }
+    /* Either explicit confirmation may win after the host's last status query.
+       A racing confirmation acknowledges the same transaction, never appends. */
+    if (equal(op,"save") && ((b->active && b->phase==CAL_SAVING) || b->result==CAL_SAVED))
+        return reply(out,"ok saving\r\n");
     if (equal(op,"save") && b->active && b->index==BUTTON_COUNT && b->phase==CAL_CONFIRM)
         return reply(out,save(b,c,s,now) ? "ok saving\r\n" : "err save\r\n");
     button_cal_cancel(b,c,s); return reply(out,"err buttons\r\n");
