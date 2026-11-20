@@ -18,6 +18,8 @@ static uint8_t glyph(char ch, uint32_t col) {
     if (col>=5) return 0;
     if (ch>='0' && ch<='9') return font[(uint32_t)(ch-'0')][col];
     if (ch>='A' && ch<='Z') return font[10u+(uint32_t)(ch-'A')][col];
+    if (ch=='+') return col==2 ? 0x3e : 8;
+    if (ch=='-') return 8;
     return ch=='.' && col==2 ? 0x60 : 0;
 }
 static void text(char *out, const char *in) {
@@ -33,7 +35,7 @@ static void value(char *out, const char *label, uint32_t qdb) {
 void screen_init(Screen *s, OledBus bus) {
     oled_init(&s->wire,bus); s->phase=0; s->cursor=0;
     s->dirty=true; s->testing=false; s->holding=false; s->done=false;
-    s->identifying=false; s->index=41;
+    s->identifying=false; s->calibrating=false; s->index=41;
     for (uint32_t i=0;i<8;++i) text(s->lines[i],"");
     format_db(0,s->large);
 }
@@ -54,10 +56,21 @@ void screen_test(Screen *s, uint32_t now_ms) {
 }
 void screen_config(Screen *s, uint32_t index) {
     screen_suspend(s); s->index=index<96 ? index : 41;
-    s->identifying=false; s->testing=false; s->holding=false; s->done=false;
+    s->identifying=false; s->calibrating=false; s->testing=false; s->holding=false; s->done=false;
 }
 void screen_identify(Screen *s, uint32_t index) {
     screen_config(s,index); s->identifying=true;
+}
+void screen_calibration(Screen *s,const char *prompt,char key,uint32_t raw,
+                        bool captured,const char *footer) {
+    for (uint32_t i=0;i<8;++i) text(s->lines[i],"");
+    text(s->lines[0],"BUTTON CALIBRATION"); text(s->lines[2],prompt);
+    if (captured) {
+        text(s->lines[4],"L ADC 0000"); s->lines[4][0]=key;
+        for (uint32_t j=0,divisor=1000;j<4;++j,divisor/=10)
+            s->lines[4][6u+j]=(char)('0'+(raw/divisor)%10u);
+    }
+    text(s->lines[6],footer); s->calibrating=true; s->dirty=true;
 }
 void screen_stop_test(Screen *s) {
     if (s->testing) { s->testing=false; s->holding=false; s->dirty=true; s->done=false; }
@@ -83,7 +96,7 @@ uint8_t screen_image(const Screen *s, uint32_t x, uint32_t page) {
         if (x>=24 && x<29) bits|=glyph((char)('0'+page),x-24u);
         return bits;
     }
-    if (page==1 || page==2) {
+    if (!s->calibrating && (page==1 || page==2)) {
         uint32_t column=x/12u;
         uint32_t length=0; while (s->large[length]) ++length;
         if (column>=length) return 0;

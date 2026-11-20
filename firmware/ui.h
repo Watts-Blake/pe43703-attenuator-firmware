@@ -1,11 +1,12 @@
 #ifndef UI_H
 #define UI_H
 #include "display_id.h"
+#include "button_cal.h"
 #define PROFILE_LEASE_MS 10000u
-enum { KEY_UNKNOWN, KEY_RELEASED, KEY_RIGHT, KEY_MINUS, KEY_OK, KEY_PLUS, KEY_LEFT };
 typedef struct {
     Screen screen;
     DisplayId identification;
+    ButtonCal calibration;
     AdcAsync sampler;
     uint32_t pending, step_index, seen, token, lease_at, sample_at_us;
     uint32_t samples[5], used, next, candidate, candidate_at, stable, last_sample;

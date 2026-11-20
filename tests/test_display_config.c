@@ -97,6 +97,8 @@ static void test_loader_compatibility(void) {
     put(&m,META_BASE+12,~256u);put(&m,META_BASE+16,~checksum);assert(bl_valid(f));
     uint8_t before[CONFIG_BASE-FLASH_BASE];memcpy(before,m.bytes,sizeof(before));
     DisplayConfig c;config_init(&c,io(&m));assert(config_save(&c,89));complete(&c);
+    assert(config_save_buttons(&c,(const uint16_t[]){4095,2500,1700,500,1100}));
+    for(uint32_t i=0;i<16;++i)config_poll(&c);
     assert(!memcmp(before,m.bytes,sizeof(before)) && bl_valid(f));
     Update u;bl_init(&u,f);char out[64];const char *hello="hello\n";
     while(*hello)(void)bl_feed(&u,*hello++,false,out);
@@ -104,9 +106,88 @@ static void test_loader_compatibility(void) {
     const char *begin="begin 00000100 00000000\n";
     while(*begin)(void)bl_feed(&u,*begin++,false,out);
     assert(!strcmp(out,"ok\n") && !bl_valid(f));
-    config_init(&c,io(&m));assert(c.index==41 && config_remaining(&c)==62);
+    config_init(&c,io(&m));assert(c.index==41 && !c.calibrated && config_remaining(&c)==62);
+}
+static const uint16_t buttons[BUTTON_COUNT]={4095,2500,1700,500,1100};
+static void finish_buttons(DisplayConfig *c) {
+    for(uint32_t i=0;i<16;++i)config_poll(c);
+    assert(!c->writing);
+}
+static void test_button_records(void) {
+    for(uint32_t stop=0;stop<=16;++stop) {
+        Memory m;empty(&m);DisplayConfig c;config_init(&c,io(&m));
+        assert(config_save(&c,89));complete(&c);
+        assert(config_save_buttons(&c,buttons));
+        for(uint32_t i=0;i<stop;++i)config_poll(&c);
+        DisplayConfig reboot;config_init(&reboot,io(&m));
+        assert(reboot.index==89 && reboot.calibrated==(stop==16));
+        if(stop<16)config_cancel(&c);
+        /* Display and button saves choose the latest value independently. */
+        assert(config_save(&reboot,42));complete(&reboot);
+        assert(config_save_buttons(&reboot,buttons));finish_buttons(&reboot);
+        config_init(&c,io(&m));assert(c.index==42 && c.calibrated && !memcmp(c.buttons,buttons,sizeof(buttons)));
+        /* A v0.3 reader ignores both halves of every v2 button record. */
+        uint32_t legacy=41;
+        for(uint32_t slot=0;slot<CONFIG_SLOTS;++slot) {
+            uint8_t *p=m.bytes+CONFIG_BASE-FLASH_BASE+slot*16u;
+            Flash f={&m,read_byte,0,0};
+            if(p[0]==1 && p[1]==0 && p[2]<96 && p[3]==0 && p[4]==(uint8_t)(p[2]^255u) &&
+               p[5]==255 && !p[6] && !p[7] &&
+               bl_crc(f,CONFIG_BASE+slot*16u,8)==(uint32_t)(p[8]|((uint32_t)p[9]<<8)|((uint32_t)p[10]<<16)|((uint32_t)p[11]<<24)) &&
+               !memcmp(p+12,"1PSD",4)) legacy=p[2];
+        }
+        assert(legacy==42);
+    }
+    for(uint32_t fail=1;fail<=16;++fail)for(uint32_t tear=0;tear<4;++tear) {
+        Memory m;empty(&m);DisplayConfig c;config_init(&c,io(&m));
+        assert(config_save_buttons(&c,buttons));finish_buttons(&c);
+        uint16_t other[BUTTON_COUNT];memcpy(other,buttons,sizeof(other));other[1]=2700;
+        m.fail=m.writes+fail;m.tear=tear==0 ? 0 : tear==1 ? 0xffffu : tear==2 ? 0xffu : 0xff00u;
+        assert(config_save_buttons(&c,other));finish_buttons(&c);
+        assert(c.fault && c.calibrated && c.buttons[1]==2500 && !config_save(&c,89));
+        config_init(&c,io(&m));assert(c.calibrated && (c.buttons[1]==2500 || (fail==16 && c.buttons[1]==2700)));
+    }
+    Memory base;empty(&base);DisplayConfig c;config_init(&c,io(&base));
+    assert(config_save_buttons(&c,buttons));finish_buttons(&c);
+    assert(config_save(&c,89));complete(&c);
+    uint16_t other[BUTTON_COUNT];memcpy(other,buttons,sizeof(other));other[1]=2700;
+    assert(config_save_buttons(&c,other));finish_buttons(&c);
+    for(uint32_t bit=0;bit<256;++bit) {
+        Memory m=base;m.bytes[CONFIG_BASE-FLASH_BASE+48u+bit/8u]^=(uint8_t)(1u<<(bit%8u));
+        config_init(&c,io(&m));assert(c.index==89 && c.calibrated && !memcmp(c.buttons,buttons,sizeof(buttons)));
+    }
+    for(uint32_t field=0;field<8;++field) {
+        Memory m=base;uint32_t a=CONFIG_BASE+48u;uint8_t *p=m.bytes+a-FLASH_BASE;
+        if(field==0)p[0]=3; /* future */
+        if(field==1)p[1]=1; /* exact u16 version */
+        if(field==2)p[2]=1; /* reserved */
+        if(field==3)p[14]=1;
+        if(field==4) { p[4]=32;p[5]=0; } /* release collision */
+        if(field==5) { p[4]=255;p[5]=255; } /* out of ADC range */
+        if(field==6) { p[4]=p[6];p[5]=p[7]; } /* overlap */
+        if(field==7)p[16]^=1; /* continuation tag */
+        Flash f={&m,read_byte,0,0};uint32_t sum=bl_crc(f,a,20);put(&m,a+20,sum);put(&m,a+24,~sum);
+        config_init(&c,io(&m));assert(c.index==89 && c.calibrated && !memcmp(c.buttons,buttons,sizeof(buttons)));
+    }
+    Memory m;empty(&m);config_init(&c,io(&m));
+    for(uint32_t i=0;i<61;++i) { assert(config_save(&c,i%2u ? 42u : 89u));complete(&c); }
+    assert(config_remaining(&c)==1 && !config_save_buttons(&c,buttons));
+    assert(!c.calibrated && !c.writing && m.writes==61u*8u);
+    empty(&m);config_init(&c,io(&m));
+    for(uint32_t i=0;i<31;++i) {
+        other[1]=(uint16_t)(i%2u ? 2700 : 2500);assert(config_save_buttons(&c,other));finish_buttons(&c);
+    }
+    assert(!config_remaining(&c) && config_save_buttons(&c,other) && !c.writing);
+    other[1]=2800;assert(!config_save_buttons(&c,other));
+    for(uint32_t a=FLASH_BASE;a<CONFIG_BASE;++a)assert(read_byte(&m,a)==255);
+    for(uint32_t raw=0;raw<5000;++raw) {
+        static const uint32_t keys[BUTTON_COUNT]={KEY_LEFT,KEY_PLUS,KEY_MINUS,KEY_RIGHT,KEY_OK};
+        uint32_t expected=raw<=32 ? KEY_RELEASED : KEY_UNKNOWN;
+        for(uint32_t i=0;i<BUTTON_COUNT;++i)if(raw<=4095 && raw+32u>=c.buttons[i] && raw<=(uint32_t)c.buttons[i]+32u)expected=keys[i];
+        assert(config_button_code(&c,raw)==expected);
+    }
 }
 int main(void) {
-    test_interruptions();test_corruption_and_bounds();test_valid_crc_invalid_fields();test_loader_compatibility();
+    test_interruptions();test_corruption_and_bounds();test_valid_crc_invalid_fields();test_loader_compatibility();test_button_records();
     puts("Display config: interrupted/torn halfwords, bit corruption, append bounds and unchanged loader geometry passed");return 0;
 }

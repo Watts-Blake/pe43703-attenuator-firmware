@@ -1,6 +1,6 @@
 # Windows, macOS and Linux host tools
 
-`tools/display_identify.py` provides [guided OLED alignment and explicitly confirmed configuration](display-identification.md), `tools/attenuator.py` provides single-port set/get and `tools/usb_update.py` provides app-only updates using [pyserial](https://pyserial.readthedocs.io/en/latest/pyserial_api.html). They require Python 3.10+ and pyserial 3.5. Firmware builds still require the separate toolchain in the README. Import, `--help` and image inspection do not open ports; inspection does not require pyserial.
+`tools/button_calibrate.py` provides [explicit five-button calibration after screen setup](button-calibration.md), `tools/display_identify.py` provides [guided OLED alignment and explicitly confirmed configuration](display-identification.md), `tools/attenuator.py` provides single-port set/get and `tools/usb_update.py` provides app-only updates using [pyserial](https://pyserial.readthedocs.io/en/latest/pyserial_api.html). They require Python 3.10+ and pyserial 3.5. Firmware builds still require the separate toolchain in the README. Import, `--help` and image inspection do not open ports; inspection does not require pyserial.
 
 ## Install and identify the port
 

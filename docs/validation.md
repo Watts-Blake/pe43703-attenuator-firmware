@@ -10,6 +10,25 @@ One examined unit successfully updated from v0.1.0 to the 4,736-byte v0.1.1 app 
 
 These observations do not establish RF accuracy, electrical continuity/timing, calibrated ADC thresholds, other-board compatibility or normal display/button support. The [applied-state display and profile-precedence implementation](design.md#applied-state-display-and-local-control) has the separate offline validation below. No new hardware operation accompanies this candidate.
 
+## v0.4.0 button calibration — offline candidate
+
+`make -B all test inspect` passes with Arm GCC 14.2.1: seven C executables and 101 Python methods, including production ADC/UI/config code driven through local PTYs by the new cross-platform helper. All seven C suites pass AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled. Tests use simulated UART/flash/GPIO/ADC only; **all new physical behavior is UNRUN**. See the [artifact-bound qualification/update plan](button-qualification.md). Published releases, installed images and earlier retained candidates are unchanged.
+
+| Artifact | Bytes | SHA256 |
+| --- | --- | --- |
+| App BIN | 15,036 | `9f3cafa87265930e5147ad1790056601ac27c08e2a6f91213520a1ad5a9248d5` |
+| App ELF | See ELF sections below | `1ce65af8cd277810e52a8a51d73d725cf61148c029538e571ac804abd7ff5d38` |
+| Loader BIN | 2,444 | `ce18cc388e9c81f1edcf6518e7a9d1575aae048ad3937c7415c2d876a6465f8c` |
+| Combined BIN | 65,536 | `3dd3ad11e512ab76b52757c4b2f6b08e5b7204d96f420da88d53c1fdb7c3249d` |
+
+App sections are 236 vector bytes, 14,648 text bytes and 152 initialized RAM-code load bytes. Static RAM remains the 128-byte mailbox at `0x20000000` plus the 152-byte RAM flash routine/literal pool at `0x20000080`, with zero BSS. Entry is `0x080021b5`, initial SP `0x20004ff8`; all 59 vectors pass for both app and loader. Loader BIN is byte-identical to the earlier v0.2/v0.3 build using this compiler. Loader source/protocol, full 55 KiB app capacity, updater geometry/metadata erase, mailbox ABI and reserved reset RAM are unchanged. There are no undefined symbols or heap/runtime calls. App reset stack use is 952 bytes; inspection of static call paths stays below 1,792 bytes versus the reserved 2 KiB, not a measured high-water mark. The unchanged flash routine and literal pool execute wholly from RAM with no flash calls while busy and no erase path.
+
+Wizard models cover stable initial/inter-key/final release, 31-sample medians, noisy/interrupted/too-close/near-release/out-of-range captures, partial cancellation, local one-second OK/release confirmation, explicit host confirmation, capture/idle/total deadlines across timer wrap, UART errors/overlong input, TX backpressure, sampler refusal and saving with ADC suspended. UI checks preserve applied attenuation throughout calibration, cancellation and timeout, reject starts during profiles, cancel before profile acquisition or external SET/mailbox apply, restore the normal screen and require a fresh release. Existing profile-token, display, loader and set/get suites remain included.
+
+Journal models interrupt every halfword of a 32-byte record, inject partial/full/no writes with error returns, flip all 256 bits, recompute CRCs over invalid versions/reserved fields/unsafe values/overlap/continuation markers, mix old display records with valid/torn button records, retain the latest independently valid display/buttons, model a v0.3 display reader, exhaust shared capacity and verify no-op saves. Save addresses remain confined to the metadata tail; app validity survives saves and the unchanged loader update clears both configurations. These models do not qualify physical interrupted-power recovery, flash endurance or permanently busy flash behavior.
+
+Portable interaction tests cover exact legacy/future negotiation refusal, explicit start/save, bounded prompts/requests/save waits, EOF/Ctrl-C/timeout/cancel, unsafe readback, busy owner, terminal errors, no UART replay/reopen, and explicit front-key confirmation. PTYs exercise actual nonblocking ADC callbacks and the production parser/UI/journal through the host helper, preserving a display-only journal, saving all five medians, simulating a boot and proving new bands control pending/apply while old out-of-band codes remain UNKNOWN. Partial calibration, profile conflict, legacy parsing and a simulated future capability over PTY fail safely. Windows/macOS branches reuse the unchanged portable transport and its fakes; physical host sessions on all platforms, ADC cadence/noise/band margins, RF accuracy, flash supply behavior and restart/power testing remain UNRUN.
+
 ## v0.3.0 display identification — offline candidate
 
 `make -B all test inspect` passes with Arm GCC 14.2.1: six C executables and 86 Python methods, including the guided helper talking through local PTYs to the production UI/config parser. All six C suites also pass AddressSanitizer and UndefinedBehaviorSanitizer with halt-on-error enabled. No physical serial device, flash/update, reset/power or RF operation was performed. **All new hardware behavior remains UNRUN.** See the [unexecuted qualification/update plan](display-qualification.md).
