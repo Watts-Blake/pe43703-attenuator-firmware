@@ -38,6 +38,7 @@ class Unit:
         self.master, self.slave = pty.openpty()
         self.port = os.ttyname(self.slave)
         self.mode, self.value, self.commands = mode, '0.00', []
+        self.profile_capable, self.token, self.fail_keep = False, None, False
         self.stop = threading.Event()
         self.worker = threading.Thread(target=self.serve, daemon=True)
         self.worker.start()
@@ -62,6 +63,19 @@ class Unit:
                     reply = ('ok ' + self.value + '\r\n').encode()
                 elif text == 'get':
                     reply = (self.value + '\r\n').encode()
+                elif self.profile_capable and text == 'profile':
+                    reply = b'profile 1\r\n'
+                elif self.profile_capable and text.startswith('profile keep '):
+                    reply = b'ok keep\r\n' if text[13:] == self.token and not self.fail_keep else b'err lock\r\n'
+                elif self.profile_capable and text.startswith('profile end '):
+                    reply = b'ok end\r\n' if text[12:] == self.token else b'err lock\r\n'
+                    self.token = None
+                elif self.profile_capable and text.startswith('profile '):
+                    if self.token is None:
+                        self.token = text[8:]
+                        reply = b'ok profile\r\n'
+                    else:
+                        reply = b'err busy\r\n'
                 else:
                     reply = b'err\r\n'
                 if text.startswith('set ') and text != 'set 0.00':
@@ -142,6 +156,62 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.units[0].value, '31.75')
         self.assertEqual(self.run_cli(target='A', action='get'), 0)
         self.assertEqual(self.units[0].commands, ['set 31.75', 'get'])
+
+    def test_profile_leases_renew_and_release_after_zero(self):
+        for unit in self.units:
+            unit.profile_capable = True
+        with patch.object(a, 'PROFILE_REFRESH', .04):
+            self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .25}]), 0)
+        for unit in self.units:
+            self.assertIsNone(unit.token)
+            commands = unit.commands
+            self.assertEqual(commands[0], 'profile')
+            self.assertTrue(commands[1].startswith('profile '))
+            self.assertGreaterEqual(sum(c.startswith('profile keep ') for c in commands), 2)
+            self.assertTrue(commands[-1].startswith('profile end '))
+            self.assertEqual(commands[-4:-1], ['!', 'set 0.00', 'get'])
+
+    def test_profile_lease_failure_never_applies_nonzero(self):
+        for unit in self.units:
+            unit.profile_capable = True
+        self.units[1].fail_keep = True
+        self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 1)
+        self.assertNotIn('set 2.00', self.units[1].commands)
+        for unit in self.units:
+            self.assertEqual(unit.value, '0.00')
+            self.assertIsNone(unit.token)
+
+    def test_profile_lease_acquisition_failure_precedes_both_sets(self):
+        for unit in self.units:
+            unit.profile_capable = True
+        self.units[1].token = 'foreign'
+        self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 1)
+        self.assertNotIn('set 1.00', self.units[0].commands)
+        self.assertNotIn('set 2.00', self.units[1].commands)
+        self.assertIsNone(self.units[0].token)
+        self.assertEqual(self.units[1].token, 'foreign')
+
+    def test_mixed_legacy_and_lease_profile(self):
+        self.units[0].profile_capable = True
+        self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .05}]), 0)
+        self.assertIsNone(self.units[0].token)
+        self.assertEqual(self.units[1].commands, ['profile', 'set 2.00', '!', 'set 0.00', 'get'])
+
+    def test_lost_lease_during_hold_stops_following_step(self):
+        for unit in self.units:
+            unit.profile_capable = True
+        emit = a.emit
+        def fail_after_step(event, **fields):
+            emit(event, **fields)
+            if event == 'step':
+                self.units[0].fail_keep = True
+        with patch.object(a, 'emit', fail_after_step), patch.object(a, 'PROFILE_REFRESH', .02):
+            self.assertEqual(self.run_cli(target='profile', steps=[{'A': '1.00', 'B': '2.00', 'duration': .25}, {'A': '3.00', 'B': '4.00', 'duration': .05}]), 1)
+        self.assertNotIn('set 3.00', self.units[0].commands)
+        self.assertNotIn('set 4.00', self.units[1].commands)
+        for unit in self.units:
+            self.assertEqual(unit.value, '0.00')
+            self.assertIsNone(unit.token)
 
     def test_serial_failure_types_bounded(self):
         for mode in ('mismatch', 'timeout', 'oversize', 'disconnect'):
@@ -234,7 +304,7 @@ class Tests(unittest.TestCase):
             return result
         with patch.object(a.Serial, 'set', change):
             self.assertEqual(self.run_cli(target='profile', steps=[{'A': '10.00', 'B': '12.00', 'duration': .05}]), 1)
-        self.assertEqual(self.units[0].commands, ['set 10.00'])
+        self.assertEqual(self.units[0].commands, ['profile', 'set 10.00'])
         self.assertEqual(self.units[1].value, '0.00')
 
     def test_real_signals_cleanup_and_no_catchup(self):
@@ -251,7 +321,7 @@ class Tests(unittest.TestCase):
         self.units[0].mode = 'oversize'
         self.assertEqual(self.run_cli(target='profile', steps=[{'A': '10.00', 'B': '12.00', 'duration': .05}]), 1)
         self.assertEqual([u.value for u in self.units], ['0.00', '0.00'])
-        self.assertEqual(self.units[0].commands, ['set 10.00', '!', 'set 0.00', 'get'])
+        self.assertEqual(self.units[0].commands, ['profile', 'set 10.00', '!', 'set 0.00', 'get'])
 
     @unittest.skipUnless(Path('/proc/self/fd').is_dir(), 'Linux /proc required')
     def test_raw_foreign_holder_refused_without_termios_change(self):
@@ -316,7 +386,7 @@ raise SystemExit(a.main(['--config',sys.argv[4],'profile',sys.argv[5]]))
                 try:
                     if send_signal:
                         deadline = time.monotonic() + 2
-                        while not units[0].commands and time.monotonic() < deadline:
+                        while 'set 12.00' not in units[0].commands and time.monotonic() < deadline:
                             time.sleep(.005)
                         self.assertTrue(units[0].commands, 'child never applied first SET')
                         child.send_signal(signal.SIGTERM)

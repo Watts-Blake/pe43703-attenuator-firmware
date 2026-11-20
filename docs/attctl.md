@@ -73,6 +73,16 @@ invalid quarter steps are errors. A 1200-second schedule fits these limits.
 Durations begin after both acknowledgments and use the monotonic clock. Delays
 extend the schedule; late steps never trigger a catch-up burst.
 
+## Firmware profile leases
+
+For v0.2.0, profiles first send the side-effect-free `profile` capability query to each owned unit. The exact legacy `err\r\n` reply retains the old profile path, appropriate for older apps with inert buttons. A `profile 1\r\n` reply enables the [token/lease protocol](design.md#usb-profile-ownership). Malformed replies, timeouts and acquisition failures stop the profile; they do not trigger a legacy fallback. Mixed old/new firmware is supported.
+
+Both leases are acquired before the first profile setting. Each supported unit is renewed before its step setting, and supported leases are renewed during holds about once per second. The firmware lease lasts 10 seconds; failed/expired renewals stop execution without replay or reacquisition. Cleanup still independently attempts zero on both owned units, then releases its own leases and closes the ports. Unlock errors are reported and fail the run. The shared host lock remains held throughout cleanup and close.
+
+The firmware suppresses local pending edits, step changes and OK while a lease is active; a one-shot USB set does not acquire a lease. Older attctl versions and generic serial controllers retain set/get compatibility but cannot identify a running profile to v0.2.0 and therefore cannot exclude local buttons without adopting this protocol. Direct CLI set/get commands remain unchanged and send no lease traffic.
+
+On disconnect, host crash or SIGKILL the firmware cannot observe USB directly through CH340; lack of renewal expires the lock after 10 seconds. Expiry keeps applied attenuation unchanged, discards pending edits and requires a debounced button release before local actions. It does not guarantee zero after host failure. Tokens prevent stale release/renew commands from touching another lease; they are not authentication, and all existing exclusive ownership rules still apply.
+
 Stdout is JSONL with UTC: `applied` records each acknowledged unit/value, `step`
 records both actual acknowledged values and the requested duration, `held`
 records elapsed monotonic seconds, and `cleanup` records each zero outcome.

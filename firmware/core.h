@@ -28,11 +28,13 @@ typedef struct {
     void (*delay_us)(void *context, uint32_t us);
     void *context;
 } Bus;
-typedef struct { Bus bus; uint32_t qdb, permutation, issued; } Controller;
+enum { SOURCE_USB, SOURCE_LOCAL, SOURCE_BOOT };
+typedef struct { Bus bus; uint32_t qdb, permutation, issued, source; } Controller;
 extern const uint8_t permutations[6][3]; /* SI, CLK, LE */
 uint16_t pe_frame(uint32_t qdb);
 void controller_boot(Controller *c, Bus bus);
 bool controller_set(Controller *c, uint32_t qdb);
+bool controller_set_from(Controller *c, uint32_t qdb, uint32_t source);
 bool controller_permutation(Controller *c, uint32_t permutation);
 void mailbox_init(volatile Mailbox *m);
 void mailbox_publish(volatile Mailbox *m, const Controller *c);

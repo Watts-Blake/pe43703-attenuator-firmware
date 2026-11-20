@@ -15,11 +15,11 @@ uint16_t pe_frame(uint32_t qdb) {
     /* Q0..Q6 = quarter dB; Q7=D7=0; Q8..15 address zero. */
     return (uint16_t)(qdb & 127u);
 }
-static void send_frame(Controller *c) {
+static void send_frame(Controller *c, uint32_t qdb, uint32_t source) {
     uint32_t si = 1u << permutations[c->permutation][0];
     uint32_t clk = 1u << permutations[c->permutation][1];
     uint32_t le = 1u << permutations[c->permutation][2];
-    uint16_t word = pe_frame(c->qdb);
+    uint16_t word = pe_frame(qdb);
     c->bus.pins(c->bus.context, 0);
     c->bus.delay_us(c->bus.context, 1);
     for (uint32_t bit = 0; bit < 16; ++bit) {
@@ -37,15 +37,19 @@ static void send_frame(Controller *c) {
     c->bus.delay_us(c->bus.context, 1);
     c->bus.pins(c->bus.context, 0);
     c->bus.delay_us(c->bus.context, 1);
-    ++c->issued;
+    /* Publish applied software state only after LE returns low. No RF readback. */
+    c->qdb = qdb; c->source = source; ++c->issued;
 }
 void controller_boot(Controller *c, Bus bus) {
     c->bus = bus; c->qdb = 0; c->permutation = 0; c->issued = 0;
-    send_frame(c);
+    send_frame(c, 0, SOURCE_BOOT);
 }
 bool controller_set(Controller *c, uint32_t qdb) {
+    return controller_set_from(c, qdb, SOURCE_USB);
+}
+bool controller_set_from(Controller *c, uint32_t qdb, uint32_t source) {
     if (qdb > 127) return false;
-    c->qdb = qdb; send_frame(c); return true;
+    send_frame(c, qdb, source); return true;
 }
 bool controller_permutation(Controller *c, uint32_t permutation) {
     if (permutation >= 6) return false;
@@ -53,7 +57,7 @@ bool controller_permutation(Controller *c, uint32_t permutation) {
        changes software masks; no pin modes or levels change during the switch. */
     c->bus.pins(c->bus.context, 0);
     c->bus.delay_us(c->bus.context, 1);
-    c->permutation = permutation; send_frame(c); return true;
+    c->permutation = permutation; send_frame(c, c->qdb, c->source); return true;
 }
 void mailbox_init(volatile Mailbox *m) {
     volatile uint32_t *p = (volatile uint32_t *)m;

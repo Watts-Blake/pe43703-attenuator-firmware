@@ -26,6 +26,45 @@ static bool wait(const AdcIo *io, uint32_t address, uint32_t mask, uint32_t want
     }
     return false;
 }
+void adc_cancel(AdcAsync *a, const AdcIo *io) {
+    if (!a->phase) return;
+    write(io,ADC_CR2,0);
+    write(io,RCC_APB2RSTR,a->resets|ADC1_BIT); write(io,RCC_APB2RSTR,a->resets);
+    /* OLED mode changes may occur between sampler phases; restore PA1 only. */
+    write(io,GPIOA_CRL,(read(io,GPIOA_CRL)&~0xf0u)|a->pa1);
+    write(io,RCC_APB2ENR,a->enables); a->phase=0;
+}
+bool adc_begin(AdcAsync *a, const AdcIo *io, uint32_t now_us) {
+    if (a->phase) return false;
+    uint32_t en=read(io,RCC_APB2ENR), reset=read(io,RCC_APB2RSTR);
+    if ((en&ADC1_BIT) || !(en&(1u<<2)) || (reset&ADC1_BIT) ||
+        (read(io,RCC_CFGR)&(3u<<14))!=(2u<<14)) return false;
+    a->enables=en; a->resets=reset; a->pa1=read(io,GPIOA_CRL)&0xf0u;
+    write(io,RCC_APB2ENR,en|ADC1_BIT); (void)read(io,RCC_APB2ENR);
+    write(io,RCC_APB2RSTR,reset|ADC1_BIT); write(io,RCC_APB2RSTR,reset);
+    write(io,GPIOA_CRL,read(io,GPIOA_CRL)&~0xf0u);
+    write(io,ADC_SMPR2,7u<<3); write(io,ADC_SQR3,1); write(io,ADC_CR2,ADON);
+    a->phase=1; a->since_us=now_us; return true;
+}
+int adc_poll(AdcAsync *a, const AdcIo *io, uint32_t now_us, uint32_t *sample) {
+    uint32_t elapsed=now_us-a->since_us;
+    if (!a->phase) return 0;
+    if (elapsed>=100u) { adc_cancel(a,io); return -1; }
+    if (a->phase==1) {
+        if (elapsed<2u) return 0;
+        write(io,ADC_CR2,ADON|RSTCAL); a->phase=2;
+    } else if (a->phase==2) {
+        if (read(io,ADC_CR2)&RSTCAL) return 0;
+        write(io,ADC_CR2,ADON|CAL); a->phase=3;
+    } else if (a->phase==3) {
+        if (read(io,ADC_CR2)&CAL) return 0;
+        (void)read(io,ADC_DR); write(io,ADC_SR,0); write(io,ADC_CR2,ADON); a->phase=4;
+    } else {
+        if (!(read(io,ADC_SR)&EOC)) return 0;
+        *sample=read(io,ADC_DR)&0xfffu; adc_cancel(a,io); return 1;
+    }
+    a->since_us=now_us; return 0;
+}
 bool adc_sample(const AdcIo *io, uint32_t *sample) {
     /* App clock contract: PCLK2=72MHz, ADCPRE=/6 gives12MHz (max14MHz).
        Refuse unexpected ownership/clock state without modifying anything. */
