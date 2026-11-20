@@ -63,7 +63,7 @@ class ProfileProtocolTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         root = Path(__file__).resolve().parents[1]
         shared = Path(cls.temp.name) / 'profile.so'
-        sources = ['tests/profile_bridge.c', 'firmware/ui.c', 'firmware/core.c', 'firmware/display_id.c', 'firmware/display_config.c',
+        sources = ['tests/profile_bridge.c', 'firmware/ui.c', 'firmware/core.c', 'firmware/display_id.c', 'firmware/display_config.c', 'firmware/button_cal.c',
                    'firmware/adc.c', 'firmware/oled.c', 'firmware/screen.c']
         subprocess.run(shlex.split(os.environ.get('CC_HOST', 'cc')) + [
             '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-Wconversion',

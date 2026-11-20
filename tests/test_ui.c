@@ -312,8 +312,80 @@ static void test_console_and_scheduling(void) {
     assert(!ui_poll(&u,&c,&adc,&probe,0,0,out,true) && d.bytes==bytes);
     oled_cancel(&probe); frame(&u.screen,&d,0); assert(d.active);
 }
+static uint8_t calibration_flash[1024];
+static uint8_t cal_read(void *ctx,uint32_t a) {
+    (void)ctx;assert(a>=CONFIG_BASE && a<FLASH_END);return calibration_flash[a-META_BASE];
+}
+static bool cal_program(void *ctx,uint32_t a,uint16_t v) {
+    (void)ctx;assert(a>=CONFIG_BASE && a<=FLASH_END-2u);
+    assert(cal_read(0,a)==255 && cal_read(0,a+1u)==255);
+    calibration_flash[a-META_BASE]=(uint8_t)v;calibration_flash[a-META_BASE+1u]=(uint8_t)(v>>8);return true;
+}
+static void capture_ui(Ui *u,Controller *c,Oled *probe,uint32_t *now) {
+    static const uint32_t values[BUTTON_COUNT]={3900,2500,1700,500,1100};
+    command(u,c,probe,"buttons start\n",*now,"ok buttons\r\n");
+    hold(u,c,0,now,120);
+    for(uint32_t i=0;i<BUTTON_COUNT;++i) {
+        hold(u,c,values[i],now,350);assert(u->calibration.phase==CAL_VALUE);
+        hold(u,c,0,now,120);
+    }
+    assert(u->calibration.phase==CAL_CONFIRM && c->issued==1 && !c->qdb && !u->pending);
+}
+static uint32_t cal_read_dummy(void *ctx,uint32_t a) { (void)ctx;(void)a;return 0; }
+static void test_calibration_ui(void) {
+    Display d={0};Controller c;controller_boot(&c,rf());Ui u;ui_init(&u,&c,bus(&d));
+    Oled probe;oled_init(&probe,bus(&d));uint32_t now=UINT32_MAX-1000u;
+    memset(calibration_flash,255,sizeof(calibration_flash));ConfigIo config={cal_read,cal_program,0};ui_configure(&u,config);
+    command(&u,&c,&probe,"buttons\n",now,"buttons 1\r\n");
+    command(&u,&c,&probe,"buttons get\n",now,"buttons none\r\n");
+    command(&u,&c,&probe,"buttons stored L\n",now,"err config\r\n");
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    command(&u,&c,&probe,"display start\n",now,"err busy\r\n");assert(u.calibration.active);
+    command(&u,&c,&probe,"display cancel\n",now,"ok cancel\r\n");assert(u.calibration.active);
+    command(&u,&c,&probe,"profile 1234abcd\n",now,"ok profile\r\n");assert(!u.calibration.active && u.locked);
+    command(&u,&c,&probe,"buttons start\n",now,"err busy\r\n");
+    command(&u,&c,&probe,"profile end 1234abcd\n",now,"ok end\r\n");
+    capture_ui(&u,&c,&probe,&now);
+    command(&u,&c,&probe,"buttons save\n",now,"ok saving\r\n");
+    AdcIo adc={no_read,no_write,quiet,0};char out[16];
+    for(uint32_t i=0;i<15;++i)assert(!ui_poll(&u,&c,&adc,&probe,now,1000000u,out,false));
+    assert(u.calibration.active && u.calibration.phase==CAL_SAVING);
+    assert(!ui_poll(&u,&c,&adc,&probe,now,0,out,false));
+    assert(u.identification.config.calibrated && !u.calibration.active && c.issued==1 && !u.pending);
+    assert(!strcmp(u.screen.lines[0],"APPLIED DB") && u.screen.index==41);
+    /* Reboot the model: persisted values must drive the actual pending/apply path. */
+    screen_suspend(&u.screen);ui_init(&u,&c,bus(&d));ui_configure(&u,config);assert(u.identification.config.calibrated);
+    press(&u,&c,2048,&now);assert(!u.pending); /* old PLUS is now UNKNOWN */
+    press(&u,&c,2500,&now);assert(u.pending==1 && c.qdb==0);
+    press(&u,&c,1100,&now);assert(c.qdb==1 && c.issued==2);
+    /* SET/acquisition cancel before a key can cross the ownership boundary. */
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    command(&u,&c,&probe,"set 5\n",now,"ok 5.00\r\n");assert(!u.calibration.active && u.pending==20);
+    hold(&u,&c,1100,&now,100);assert(c.issued==3);
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    (void)controller_set(&c,40);ui_sync(&u,&c);assert(!u.calibration.active && u.pending==40);
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    command(&u,&c,&probe,"buttons save\n",now,"err buttons\r\n");assert(!u.calibration.active);
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    command(&u,&c,&probe,"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",now,"err\r\n");assert(!u.calibration.active);
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    Line line={0};(void)ui_console_feed(&u,&line,&c,&adc,&probe,now,'x',true,out);assert(!u.calibration.active);
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    /* Full TX cannot suppress the idle deadline or create an unsolicited reply. */
+    TxQueue tx={0};assert(tx_push(&tx,"xxxxxxxxxxxxxxxx",16));
+    assert(tx_push(&tx,"xxxxxxxxxxxxxxxx",16));assert(tx_push(&tx,"xxxxxxxxxxxxxxxx",16));
+    assert(tx_push(&tx,"xxxxxxxxxxxxxxxx",16));
+    assert(!ui_poll(&u,&c,&adc,&probe,now+BUTTON_IDLE_MS,0,out,tx.used<=48));
+    assert(!u.calibration.active && u.calibration.result==CAL_TIMEOUT && c.qdb==40 && c.issued==4);
+    /* Production sampler acquisition failure closes the wizard. */
+    command(&u,&c,&probe,"buttons start\n",now,"ok buttons\r\n");
+    AdcIo unavailable={0};unavailable.read=cal_read_dummy;
+    unavailable.write=no_write;unavailable.delay_us=quiet;
+    assert(!ui_poll(&u,&c,&unavailable,&probe,now,5000,out,false));
+    assert(!u.calibration.active && u.calibration.result==CAL_SAMPLE && c.qdb==40);
+}
 int main(void) {
-    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();test_identification();
+    test_buttons(); test_lease(); test_atomic_profile_set(); test_display(); test_post_latch(); test_console_and_scheduling();test_identification();test_calibration_ui();
     puts("UI: guarded ladder, median/debounce/release, clamping, post-latch state, leases/wrap, fixed OLED bytes and bounded alignment passed");
     return 0;
 }

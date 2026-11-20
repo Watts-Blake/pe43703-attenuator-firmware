@@ -258,7 +258,7 @@ class ProductionPtyTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         shared = Path(cls.temp.name) / 'display.so'
         sources = ['tests/display_bridge.c', 'firmware/ui.c', 'firmware/core.c',
-                   'firmware/display_id.c', 'firmware/display_config.c',
+                   'firmware/display_id.c', 'firmware/display_config.c', 'firmware/button_cal.c',
                    'firmware/adc.c', 'firmware/oled.c', 'firmware/screen.c']
         subprocess.run(shlex.split(os.environ.get('CC_HOST', 'cc')) + [
             '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-Wconversion',

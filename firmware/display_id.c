@@ -26,7 +26,7 @@ void display_id_init(DisplayId *d, Screen *s, ConfigIo io) {
     screen_config(s,d->config.index);
 }
 void display_id_cancel(DisplayId *d, Screen *s) {
-    config_cancel(&d->config);
+    if (d->active) config_cancel(&d->config);
     if (d->active) screen_config(s,d->config.index);
     d->active=false; d->saving=false; d->result=ID_IDLE;
 }
