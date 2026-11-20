@@ -23,6 +23,9 @@ void oled_cancel(Oled *p);
 /* Fixed observed PA6/7/5/4 reset-mode bus, SSD1306-compatible column zero. */
 void oled_fixed_begin(Oled *p);
 bool oled_fixed_init(Oled *p, uint32_t cursor);
+/* Validated trial index: family, reset/CS mode and PA4..7 permutation. */
+void oled_config_begin(Oled *p, uint32_t index);
+bool oled_config_init(Oled *p, uint32_t cursor);
 void oled_write(Oled *p, uint8_t value, bool data);
 /* One byte/control transition per call; never waits for a hold deadline.
    can_report requires16 free TX bytes. Deadline cleanup runs even when false. */

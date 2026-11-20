@@ -102,7 +102,7 @@ static void test_console(void) {
     Model m; init(&m); Controller c; Bus bus={pe_pins,pe_delay,&m}; controller_boot(&c,bus);
     assert(c.qdb==0 && c.issued==1 && m.accesses==0);
     Line l={0}; feed(&l,&c,&m,"get\r\n","0.00\r\n");
-    feed(&l,&c,&m,"version\n","version 0.2.0\r\n"); assert(m.accesses==0 && c.issued==1);
+    feed(&l,&c,&m,"version\n","version 0.3.0\r\n"); assert(m.accesses==0 && c.issued==1);
     feed(&l,&c,&m,"set 20\n","ok 20.00\r\n"); assert(m.accesses==0);
     uint32_t events=m.pe_events, issued=c.issued;
     const char *bad[]={"ADC\n","adc \n","adc 1\n","diag adc 1\n","diag\n",

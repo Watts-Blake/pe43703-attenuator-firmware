@@ -29,16 +29,24 @@ static void reset_buttons(Ui *u) {
 }
 void ui_init(Ui *u, Controller *c, OledBus bus) {
     screen_init(&u->screen,bus); u->sampler.phase=0;
+    ConfigIo none={0}; display_id_init(&u->identification,&u->screen,none);
     u->pending=c->qdb; u->step_index=0; u->seen=c->issued;
     u->locked=false; u->token=0; u->lease_at=0; u->sample_at_us=0;
     reset_buttons(u); u->dirty=true;
 }
+void ui_configure(Ui *u, ConfigIo io) { display_id_init(&u->identification,&u->screen,io); }
 void ui_sync(Ui *u, Controller *c) {
     if (u->seen==c->issued) return;
     u->seen=c->issued; u->pending=c->qdb; reset_buttons(u);
+    display_id_cancel(&u->identification,&u->screen);
     screen_stop_test(&u->screen); u->dirty=true;
+    if (u->screen.index!=u->identification.config.index)
+        screen_config(&u->screen,u->identification.config.index);
 }
 void ui_expire(Ui *u, Controller *c, uint32_t now_ms) {
+    bool identifying=u->identification.active;
+    display_id_expire(&u->identification,&u->screen,now_ms);
+    if (identifying && !u->identification.active) reset_buttons(u);
     if (u->locked && (uint32_t)(now_ms-u->lease_at)>=PROFILE_LEASE_MS) {
         u->locked=false; u->token=0; u->pending=c->qdb; reset_buttons(u); u->dirty=true;
     }
@@ -54,7 +62,7 @@ uint32_t button_code(uint32_t raw) {
 }
 void ui_button_sample(Ui *u, Controller *c, uint32_t raw, uint32_t now_ms) {
     ui_expire(u,c,now_ms); ui_sync(u,c);
-    if (u->locked || u->screen.testing) { reset_buttons(u); return; }
+    if (u->locked || u->screen.testing || u->identification.saving) { reset_buttons(u); return; }
     if (u->used && (uint32_t)(now_ms-u->last_sample)>20u) reset_buttons(u);
     u->last_sample=now_ms;
     u->samples[u->next]=raw; u->next=(u->next+1u)%5u;
@@ -73,6 +81,9 @@ void ui_button_sample(Ui *u, Controller *c, uint32_t raw, uint32_t now_ms) {
     if (key==KEY_RELEASED) { u->armed=true; return; }
     if (!u->armed) return;
     u->armed=false;
+    if (u->identification.active) {
+        display_id_next(&u->identification,&u->screen,now_ms); return;
+    }
     uint32_t step=steps[u->step_index];
     if (key==KEY_PLUS) u->pending=u->pending+step>127u ? 127u : u->pending+step;
     else if (key==KEY_MINUS) u->pending=u->pending<step ? 0 : u->pending-step;
@@ -84,10 +95,14 @@ void ui_button_sample(Ui *u, Controller *c, uint32_t raw, uint32_t now_ms) {
 size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
                        Oled *probe, uint32_t now_ms, char ch, bool rx_error, char out[16]) {
     ui_expire(u,c,now_ms); ui_sync(u,c);
+    if (rx_error) { display_id_cancel(&u->identification,&u->screen); reset_buttons(u); }
     if ((ch=='\r' || ch=='\n') && line->used && !line->discard && !rx_error) {
         line->data[line->used]=0; const char *s=line->data; uint32_t token, qdb;
         const char *value=token_prefix(s,"profile set ",&token);
         const char *answer=0;
+        size_t dn=display_id_command(&u->identification,&u->screen,s,now_ms,
+            u->locked || probe->active || u->screen.testing,out);
+        if (dn) { line->used=0; reset_buttons(u); return dn; }
         if (equal(s,"profile")) answer="profile 2\r\n";
         else if (value && *value==' ' && parse_db(value+1,&qdb)) {
             /* Expiry, token validation and latch share this main-loop dispatch;
@@ -103,6 +118,7 @@ size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
         else if (token_after(s,"profile ",&token)) {
             if (u->locked) answer="err busy\r\n";
             else {
+                display_id_cancel(&u->identification,&u->screen);
                 u->locked=true; u->token=token; u->lease_at=now_ms;
                 u->pending=c->qdb; reset_buttons(u); u->dirty=true; answer="ok profile\r\n";
             }
@@ -116,15 +132,22 @@ size_t ui_console_feed(Ui *u, Line *line, Controller *c, const AdcIo *adc,
                 u->dirty=true; answer="ok end\r\n";
             }
         } else if (equal(s,"oledtest")) {
-            if (probe->active || u->screen.testing) answer="err busy\r\n";
+            if (probe->active || u->screen.testing || u->identification.active) answer="err busy\r\n";
             else { reset_buttons(u); screen_test(&u->screen,now_ms); answer="ok oledtest\r\n"; }
         }
         if (answer) { line->used=0; return reply(out,answer); }
         /* Raw diagnostics serialize with the automatic ADC sampler. */
         if (equal(s,"adc") || equal(s,"diag adc") || equal(s,"bootloader")) adc_cancel(&u->sampler,adc);
-        if (equal(s,"oledprobe")) { screen_stop_test(&u->screen); screen_suspend(&u->screen); reset_buttons(u); }
+        if (equal(s,"oledprobe")) {
+            display_id_cancel(&u->identification,&u->screen);
+            screen_stop_test(&u->screen); screen_suspend(&u->screen); reset_buttons(u);
+        }
     }
     size_t n=probe_console_feed(line,c,adc,probe,now_ms,ch,rx_error,out);
+    if (line->discard || (n>=3 && out[0]=='e' && out[1]=='r' && out[2]=='r')) {
+        if (u->identification.active) reset_buttons(u);
+        display_id_cancel(&u->identification,&u->screen);
+    }
     ui_sync(u,c);
     if (line->bootloader) { adc_cancel(&u->sampler,adc); screen_suspend(&u->screen); }
     return n;
@@ -133,6 +156,9 @@ size_t ui_poll(Ui *u, Controller *c, const AdcIo *adc, Oled *probe,
                uint32_t now_ms, uint32_t now_us, char out[16], bool can_report) {
     ui_expire(u,c,now_ms); ui_sync(u,c);
     if (probe->active) { adc_cancel(&u->sampler,adc); reset_buttons(u); return 0; }
+    bool identifying=u->identification.active;
+    display_id_poll(&u->identification,&u->screen,now_ms);
+    if (identifying && !u->identification.active) reset_buttons(u);
     uint32_t raw;
     int result=adc_poll(&u->sampler,adc,now_us,&raw);
     if (result>0) ui_button_sample(u,c,raw,now_ms);
@@ -146,6 +172,12 @@ size_t ui_poll(Ui *u, Controller *c, const AdcIo *adc, Oled *probe,
         u->dirty=false;
     }
     screen_poll(&u->screen,now_ms);
+    if (!u->screen.testing && !u->identification.active &&
+        u->screen.index!=u->identification.config.index) {
+        bool done=u->screen.done;
+        screen_config(&u->screen,u->identification.config.index);
+        u->screen.done=done;
+    }
     if (u->screen.done && can_report) { u->screen.done=false; return reply(out,"oledtest done\r\n"); }
     return 0;
 }

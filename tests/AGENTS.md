@@ -5,6 +5,7 @@
 - Tests must never launch a real OpenOCD process or access physical USB/UART/SWD hardware. Simulations and command acknowledgments cannot establish RF performance; see `docs/validation.md`.
 - `test_profile_protocol.py` links `profile_bridge.c` to production firmware and runs production attctl through local PTYs, including lease expiry between keep and SET; it compiles a host-only shared library with `CC_HOST` (default `cc`).
 - `test_ui.c` covers post-latch publication, button filtering/release, leases, fixed OLED frames, diagnostic deadlines and queued UART interaction; `test_adc.c` also models the nonblocking sampler.
+- `test_display_config.c` models torn/corrupt journal records and unchanged loader validity/update geometry. `test_display_identify.py` tests portable prompts/failures and the production UI/config parser through local PTYs via `display_bridge.c`; OLED tests decode all 96 held trials.
 - Run `make all test inspect` from the repository root. `fixtures/README.md` records the pinned upstream OpenOCD fixtures and their licensing; preserve those fixtures as upstream material.
 - `test_attctl.py` exercises USB control with local PTYs, synthetic sysfs, signals, ownership refusal, strict validation and independent zero cleanup; run it alone with `python3 -m unittest discover -s tests -p test_attctl.py -v`.
 

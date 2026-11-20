@@ -1,6 +1,6 @@
 # UART bootloader and USB app updates
 
-The combined loader/app image passed SWD flash and independent verification, CH340 set/get and one same-image USB app update on one examined unit. The 2,156-byte app transferred in 34 chunks, the loader acknowledged CRC completion, and GET returned requested zero after app start. See the [qualification record](validation.md) and [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0). Retain SWD access until those checks pass on the particular board. The published v0.1.0 images omit display/buttons; the v0.2.0 screen/button candidate has offline coverage only.
+The combined loader/app image passed SWD flash and independent verification, CH340 set/get and one same-image USB app update on one examined unit. The 2,156-byte app transferred in 34 chunks, the loader acknowledged CRC completion, and GET returned requested zero after app start. See the [qualification record](validation.md) and [v0.1.0 downloads](https://github.com/Watts-Blake/pe43703-attenuator-firmware/releases/tag/v0.1.0). Retain SWD access until those checks pass on the particular board. The published v0.1.0 images omit display/buttons; the v0.3.0 display-identification candidate builds on the offline v0.2.0 screen/buttons and remains hardware UNRUN.
 
 ## Images and memory
 
@@ -8,11 +8,13 @@ The combined loader/app image passed SWD flash and independent verification, CH3
 | --- | --- |
 | `0x08000000..0x08001fff`, `bootloader.elf/.bin/.hex` | 8 KiB reserved loader; initial SWD installation only |
 | `0x08002000..0x0800fbff`, `attenuator.elf/.bin/.hex` | Up to 55 KiB app; app vector table and VTOR at its base |
-| `0x0800fc00..0x0800ffff` | 1 KiB metadata page; commit, byte size, CRC32, complemented size/CRC |
+| `0x0800fc00..0x0800ffff` | 1 KiB metadata page; first 20 bytes hold app commit/size/CRC/complements; bytes 32–1023 hold the display journal |
 | `combined.bin/.hex` | Full 64 KiB loader/app/CRC image for the guarded SWD installer |
 | `0x20004ff8..0x20004fff` | Reserved eight-byte RAM reset request; excluded from both linkers' RAM |
 
 Use only the **app-only `attenuator.bin`** with the USB updater. Do not send `combined.bin`, HEX or ELF. The host validates app length/alignment, aligned RAM stack pointer and Thumb reset vector inside the supplied relocated image before opening the port. The loader independently checks the same bounds and CRC before committing or running it. CRC detects corruption; it is not a signature, board identification or authentication. Install only trusted code built for the matching board and loader layout.
+
+**Display configuration resets on every app update.** The unchanged loader erases the complete metadata page before app pages; v0.3.0 uses its spare tail for an append-only journal. No loader or app limit changes, new erase command or config migration are required. The app starts with factory trial 41 after an update; [repeat identification](display-identification.md) if needed. Never erase metadata to clear display settings: that invalidates the app. See the [UNRUN candidate qualification/update plan](display-qualification.md).
 
 ## Update after initial SWD installation
 

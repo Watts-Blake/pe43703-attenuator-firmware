@@ -14,6 +14,8 @@
 #define GPIOB_CRH REG(0x40010c04u)
 #define GPIOB_BSRR REG(0x40010c10u)
 #define FLASH_ACR REG(0x40022000u)
+#define FLASH_SR REG(0x4002200cu)
+#define FLASH_CR REG(0x40022010u)
 #define USART_SR REG(0x40013800u)
 #define USART_DR REG(0x40013804u)
 #define USART_BRR REG(0x40013808u)
@@ -71,6 +73,33 @@ static void oled_end(void *context) {
     GPIOA_CRL=(GPIOA_CRL & 0xffffu)|s->mode;
     oled_pins(context,s->latch);
 }
+static uint8_t config_read(void *context, uint32_t address) {
+    (void)context;
+    return *(volatile uint8_t *)address;
+}
+/* No erase path. Run the busy wait from RAM, including its literal pool.
+   HSI remains enabled by clock_init, as required for flash programming. */
+__attribute__((section(".ramfunc"),noinline))
+static bool config_program(void *context, uint32_t address, uint16_t value) {
+    (void)context;
+    if (address<CONFIG_BASE || address>FLASH_END-2u || (address&1u) ||
+        !(RCC_CR&2u) || (FLASH_SR&1u) || *(volatile uint16_t *)address!=UINT16_MAX) return false;
+    if (FLASH_CR&128u) {
+        REG(0x40022004u)=0x45670123u; REG(0x40022004u)=0xcdef89abu;
+    }
+    if (FLASH_CR&128u) return false;
+    FLASH_SR=0x34u; FLASH_CR=1u;
+    *(volatile uint16_t *)address=value;
+    for (uint32_t n=0;n<1000000u;++n) {
+        if (!(FLASH_SR&1u)) {
+            uint32_t status=FLASH_SR; FLASH_CR=128u; FLASH_SR=0x34u;
+            return (status&0x34u)==0x20u && *(volatile uint16_t *)address==value;
+        }
+    }
+    /* Ambiguous completion: no more programming in this boot (config.fault).
+       A permanently busy single-bank flash can stall subsequent flash fetches. */
+    return false;
+}
 static void park(void) {
     __asm__ volatile ("cpsid i" ::: "memory");
     for (;;) __asm__ volatile ("wfi");
@@ -106,6 +135,7 @@ void Reset_Handler(void) {
     const OledBus display={oled_begin,oled_pins,oled_end,delay_us,&saved};
     oled_init(&oled,display);
     Ui ui; ui_init(&ui,&controller,display);
+    const ConfigIo configuration={config_read,config_program,0}; ui_configure(&ui,configuration);
     TxQueue tx; tx.read=0; tx.write=0; tx.used=0;
     uint32_t last_ticks=SYST_CVR, fraction=0, now_ms=0;
     for (;;) {

@@ -1,4 +1,5 @@
 #include "oled.h"
+#include "screen.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -168,7 +169,38 @@ static void test_cancel_each_mapping(void) {
     assert(oled_start(&p,0));(void)oled_poll(&p,0,out,true);(void)oled_poll(&p,0,out,true);
     assert(t.active);assert(!oled_poll(&p,OLED_LIMIT_MS,out,false) && !t.active && !p.active);
 }
+static void test_held_patterns(void) {
+    for(uint32_t index=0;index<96;++index) {
+        Trace t={0};t.index=index;Screen s;screen_init(&s,bus(&t));screen_identify(&s,index);
+        for(uint32_t n=0;n<2400;++n) {
+            uint64_t before=t.us;screen_poll(&s,0);assert(t.us-before<=25);
+        }
+        assert(s.phase==4 && s.identifying && !s.testing);
+        uint32_t init=index<48 ? 24u : 22u;
+        assert(t.count==init+1080u+1048u+1u);
+        assert(t.stream[init-2u]==(index<48 ? 0x8du : 0xadu));
+        assert(t.stream[init-1u]==(index<48 ? 0x14u : 0x8bu));
+        uint32_t cursor=init;
+        for(uint32_t page=0;page<8;++page) {
+            assert(t.stream[cursor++]==0xb0u+page);assert(t.stream[cursor++]==0);
+            assert(t.stream[cursor++]==0x10);
+            for(uint32_t x=0;x<132;++x)assert(t.stream[cursor++]==0x100);
+        }
+        for(uint32_t page=0;page<8;++page) {
+            assert(t.stream[cursor++]==0xb0u+page);
+            assert(t.stream[cursor++]==(index<48 ? 0u : 2u));assert(t.stream[cursor++]==0x10);
+            for(uint32_t x=0;x<128;++x)assert(t.stream[cursor++]==(0x100u|screen_image(&s,x,page)));
+            assert(screen_image(&s,0,page)==255 && screen_image(&s,127,page)==255);
+        }
+        assert(t.stream[cursor++]==0xaf && cursor==t.count);
+        uint32_t count=t.count;
+        for(uint32_t now=0;now<600000;now+=1000)screen_poll(&s,now);
+        assert(t.count==count); /* holds do not advance or expire in screen driver */
+        screen_suspend(&s);assert(!t.active && t.ends==1 && !t.rf);
+    }
+}
 int main(void) {
     test_mapping();test_sweep();test_uart_cancel();test_queue();test_cancel_each_mapping();
+    test_held_patterns();
     puts("OLED: all96 trials, actualSPI bytes/timing/white+pattern, wrap/deadline, inertboot, boundedUART queue and SET cancellation passed");return 0;
 }

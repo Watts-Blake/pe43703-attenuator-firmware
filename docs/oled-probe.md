@@ -29,7 +29,7 @@ Trial 41 uses SSD1306-family initialization and column 0; trial 89 uses SH1106-f
 
 Solomon Systech's [SSD1306 Rev1.1, §8.7](https://cdn-shop.adafruit.com/datasheets/SSD1306.pdf) defines 128×64-bit display RAM. Sino Wealth's [SH1106 V2.6, features and display RAM](https://www.displayfuture.com/Display/datasheet/controller/SH1106.pdf) defines 132×64-bit RAM. A 128-column panel centered within 132 columns uses a two-column start offset; that module arrangement is not a universal property of every SH1106 panel. Applying the wrong start offset shifts the image and can clip an edge. The probe compares column 0 with column 2 rather than identifying silicon from a lit screen.
 
-Physical module size is not controller identity or pixel geometry. Labels such as 0.91, 0.96 or 1.3 inches cannot establish the driver, visible column mapping or row count; in particular, a 0.91-inch panel must not be assumed to be 128×64. Match the actual panel and wiring. The current candidate's fixed screen targets only the observed column-zero geometry; guided identification and persistent per-device display configuration are not implemented.
+Physical module size is not controller identity or pixel geometry. Labels such as 0.91, 0.96 or 1.3 inches cannot establish the driver, visible column mapping or row count; in particular, a 0.91-inch panel must not be assumed to be 128×64. Match the actual panel and wiring. The factory default targets the observed column-zero geometry. The v0.3.0 candidate adds [guided held patterns and persistent per-device configuration](display-identification.md), with explicit user choice; its new hardware behavior is UNRUN.
 
 ## v0.2.0 fixed screen and bounded alignment diagnostic
 
@@ -83,6 +83,8 @@ For permutation p in 0–23 below, global index is `p + 24*mode + 48*family`, wh
 ## Protocol and bounds
 
 Both serial encoders send MSB first and sample on rising clock, with 1 µs data setup/high/low and an extra 1 µs byte-ending interval. R mode pulses reset low 10 µs and waits 10 µs after releasing it. C mode leaves reset to the module. Each main-loop call emits at most one byte (25 µs explicit delay) or one 20 µs reset transition; holds use a wrap-safe millisecond state machine. These are software delay bounds under the working 72 MHz clock contract, not measured pad timing or total execution latency.
+
+The new `display` session reuses these same role indices and initialization lists, holds labeled trials for explicit advancement, and saves only on request; the legacy sweep timing described here is unchanged. See [identification protocol and flash limits](display-identification.md).
 
 The exact init lists are in `firmware/oled.c`. SSD1306 uses page addressing, `8D 14` pump enable and column 0. SH1106 uses `AD 8B` internal DC-DC enable and column 2 for a 128-column window in its 132-column RAM. Both use 64 commons, normal RAM display, normal pixel polarity, reversed segment/common mapping and contrast 0x10. White fill uses RAM data rather than an entire-display-on override. Each image sends 8 pages of 3 positioning-command bytes and 128 data bytes: 1048 bytes. There is no framebuffer allocation, controller readback, automatic inference or unbounded GPIO scan.
 
